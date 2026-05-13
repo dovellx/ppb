@@ -1,0 +1,11 @@
+E:\code\jm\target\debug\deps\ark_serialize-cad3602b7408b41a.d: C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\lib.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\error.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\flags.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\impls.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\../README.md
+
+E:\code\jm\target\debug\deps\libark_serialize-cad3602b7408b41a.rlib: C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\lib.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\error.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\flags.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\impls.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\../README.md
+
+E:\code\jm\target\debug\deps\libark_serialize-cad3602b7408b41a.rmeta: C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\lib.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\error.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\flags.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\impls.rs C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\../README.md
+
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\lib.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\error.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\flags.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\impls.rs:
+C:\Users\admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\ark-serialize-0.5.0\src\../README.md:

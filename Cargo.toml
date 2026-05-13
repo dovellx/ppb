@@ -1,0 +1,3 @@
+[workspace]
+members = ["ppb", "SPS-EQ", "final"]
+resolver = "2"

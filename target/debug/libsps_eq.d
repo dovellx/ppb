@@ -1,0 +1,1 @@
+E:\code\jm\target\debug\libsps_eq.rlib: E:\code\jm\SPS-EQ\src\lib.rs E:\code\jm\SPS-EQ\src\sign.rs E:\code\jm\SPS-EQ\src\sign_prime.rs E:\code\jm\SPS-EQ\src\verify.rs E:\code\jm\SPS-EQ\src\verify_prime.rs

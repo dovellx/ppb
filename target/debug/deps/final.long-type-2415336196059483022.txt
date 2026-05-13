@@ -1,0 +1,1 @@
+mercurial_signature::params::PublicParams<ark_ec::models::bls12::Bls12<ark_bls12_381::Config>>

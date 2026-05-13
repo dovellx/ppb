@@ -1,0 +1,30 @@
+[package]
+name = "mercurial-signature"
+version = "0.1.0"
+authors = ["AlvinHon <alvin.cpp@gmail.com>"]
+edition = "2021"
+license = "MIT/Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/AlvinHon/mercurial-signature"
+categories = ["cryptography"]
+keywords = ["cryptography", "crypto", "signature", "mercurial-signature"]
+description = "Implement Mercurial Signature"
+
+[lib]
+name = "mercurial_signature"
+path = "src/lib.rs"
+
+[dependencies]
+ark-bls12-381 = "0.5"
+ark-ec = "0.5"
+ark-serialize = "0.5"
+ark-std = "0.5"
+rand_core = "0.6"
+
+[dev-dependencies]
+rand = "0.8"
+criterion = "0.5"
+
+[[bench]]
+name = "bench"
+harness = false

@@ -1,0 +1,7 @@
+E:\code\jm\target\debug\deps\final-77285d06cb2c192e.d: final\src\main.rs final\src\commit.rs final\src\setup.rs
+
+E:\code\jm\target\debug\deps\libfinal-77285d06cb2c192e.rmeta: final\src\main.rs final\src\commit.rs final\src\setup.rs
+
+final\src\main.rs:
+final\src\commit.rs:
+final\src\setup.rs:

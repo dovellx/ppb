@@ -425,6 +425,8 @@ dependencies = [
  "ark-std",
  "mercurial-signature",
  "num-bigint",
+ "num-traits",
+ "rand",
  "rust",
  "sps_eq",
 ]

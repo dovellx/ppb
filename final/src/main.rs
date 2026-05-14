@@ -1,3 +1,4 @@
+mod commit;
 mod setup;
 
 use num_bigint::BigUint;
@@ -30,5 +31,28 @@ fn main() {
     println!("Λ_BLUE (ppb 参数): lambda_bits = {}", lambda.lambda_blue.lambda_bits);
     println!("t     (阈值): {}", lambda.t);
 
-    println!("\n=== Setup 完成 ===");
+    // ================================================================
+    // Algorithm 1: Commit 演示
+    // ================================================================
+    println!("\n=== Algorithm 1: Commit 演示 ===\n");
+
+    // 准备输入：名单 x = (x_1, x_2, x_3)，随机数 r_x，掩码 s
+    let x = vec![
+        BigUint::from(5u32),
+        BigUint::from(11u32),
+        BigUint::from(13u32),
+    ];
+    let r_x = BigUint::from(37u32);
+    let s = BigUint::from(7u32);
+    println!("输入: x = {:?}, r_x = {}, s = {}", x, r_x, s);
+
+    // 调用 Algorithm 1: Commit
+    let poly_commit = commit::commit(&lambda, &x, &r_x, &s);
+
+    println!("输出:");
+    println!("  多项式 P 的系数 (a_0, ..., a_{{|x|}}) = {:?}", poly_commit.coeffs);
+    println!("  承诺值 C_x 的位长 = {} bits", poly_commit.c.bits());
+    println!("  C_x = {}", poly_commit.c);
+
+    println!("\n=== 完成 ===");
 }

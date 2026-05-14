@@ -21,7 +21,7 @@ pub struct HecParams {
 /// 论文记号 `f_{n,k}` 的工程化承载结构。
 ///
 /// - `n`: 名单规模（应与输入 `x` 的长度一致）
-/// - `k`: 业务侧附加参数（当前 HECenc 仅透传到审计上下文）
+/// - `k`: k是用户属性yat的比特长度
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HecFunctionKey {
     pub n: usize,

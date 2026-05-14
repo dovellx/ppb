@@ -1,13 +1,11 @@
 mod commit;
+mod keygen;
 mod setup;
 
 use num_bigint::BigUint;
 
 // 使用 ppb 的 Pedersen 承诺
-use rust::{setup_pedersen, commit_pedersen_with_opening, PedersenCommitmentParams};
-
-// 使用 SPS-EQ 的签名
-use sps_eq::sign::{keygen, SecretKey, PublicKey, Signature};
+use rust::setup_pedersen;
 
 fn main() {
     println!("=== Algorithm 2: Setup 演示 ===\n");
@@ -53,6 +51,41 @@ fn main() {
     println!("  多项式 P 的系数 (a_0, ..., a_{{|x|}}) = {:?}", poly_commit.coeffs);
     println!("  承诺值 C_x 的位长 = {} bits", poly_commit.c.bits());
     println!("  C_x = {}", poly_commit.c);
+
+    // ================================================================
+    // Algorithm 3: KeyGen 演示
+    // ================================================================
+    println!("\n=== Algorithm 3: KeyGen 演示 ===\n");
+
+    // 场景 1: ℓ > t（|x| = 5, t = 3, α = 2 ≠ 0 → 分割为 x1[0:3], x2[3:5]）
+    let x_keygen: Vec<BigUint> = (1..=5).map(|i| BigUint::from(i as u32)).collect();
+    let r_x_keygen = vec![BigUint::from(100u32), BigUint::from(200u32)];
+    let s_keygen = vec![BigUint::from(3u32), BigUint::from(5u32)];
+    println!("场景 1: ℓ > t (|x|={}, t={})", x_keygen.len(), lambda.t);
+    println!("  x = {:?}, r_x = {:?}, s = {:?}", x_keygen, r_x_keygen, s_keygen);
+
+    let ((pk, sk), c_x) = keygen::keygen(&lambda, &x_keygen, &r_x_keygen, &s_keygen);
+
+    println!("  pk_Λ1 存在: {}", pk.pk1.is_some());
+    println!("  pk_Λ2 存在: true");
+    println!("  pk_SPS 存在: {}", pk.pk_sps.is_some());
+    println!("  C_x1 存在: {}, 系数数量: {}", c_x[0].is_some(), c_x[0].as_ref().map_or(0, |c| c.coeffs.len()));
+    println!("  C_x2 存在: {}, 系数数量: {}", c_x[1].is_some(), c_x[1].as_ref().map_or(0, |c| c.coeffs.len()));
+
+    // 场景 2: ℓ ≤ t（|x| = 2, t = 3）
+    let x_small = vec![BigUint::from(42u32), BigUint::from(99u32)];
+    let r_x_small = vec![BigUint::from(10u32), BigUint::from(20u32)];
+    let s_small = vec![BigUint::from(1u32), BigUint::from(2u32)];
+    println!("\n场景 2: ℓ ≤ t (|x|={}, t={})", x_small.len(), lambda.t);
+    println!("  x = {:?}, r_x = {:?}, s = {:?}", x_small, r_x_small, s_small);
+
+    let ((pk2, sk2), c_x2) = keygen::keygen(&lambda, &x_small, &r_x_small, &s_small);
+
+    println!("  pk_Λ1 = ⊥: {}", pk2.pk1.is_none());
+    println!("  pk_Λ2 存在: true");
+    println!("  pk_SPS = ⊥: {}", pk2.pk_sps.is_none());
+    println!("  C_x1 = ⊥: {}", c_x2[0].is_none());
+    println!("  C_x2 存在: {}, 系数数量: {}", c_x2[1].is_some(), c_x2[1].as_ref().map_or(0, |c| c.coeffs.len()));
 
     println!("\n=== 完成 ===");
 }

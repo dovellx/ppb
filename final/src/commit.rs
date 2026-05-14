@@ -4,17 +4,15 @@
 //! 计算多项式 P = s * ∏(x - x_i) 的系数展开，
 //! 然后对系数向量 (a_0, a_1, ..., a_{|x|}) 计算承诺值 C_x。
 //!
-//! 本实现按用户描述做了如下改动：
-//! - 为多项式 P 的每个系数 a_i 采样独立的随机基 g_i；
-//! - 承诺值 C = (∏ g_i^{a_i}) * h^{r_x} mod n^2。
+//! 承诺使用 DF 参数中的固定基 g：
+//!   C = g^{a_0} * g^{a_1} * ... * g^{a_k} * h^{r_x} mod n^2
+//!     = g^{sum(a_i)} * h^{r_x} mod n^2
 //!
 //! 暂时忽略 crs1, crs2。
 
 use num_bigint::BigUint;
-use rand::rngs::OsRng;
 
-use rust::{expand_roots_to_coefficients_mod_n};
-use rust::math::sample_unit_mod_n2;
+use rust::expand_roots_to_coefficients_mod_n;
 
 use crate::setup::Lambda;
 
@@ -51,10 +49,8 @@ pub struct PolyCommitment {
 ///     n 为模数，在 Z_n 上展开多项式并返回系数向量。
 ///
 /// Step 3: C_x <- COM.Com(cpar, (a_0, ..., a_{|x|}); r_x)
-///   - 按用户描述的改动实现：
-///     a) 根据 P 的系数个数，采样对应数量的随机基 g_i ∈ Z_{n^2}^*；
-///     b) 计算 G = ∏ g_i^{a_i} mod n^2（多基承诺的核心）；
-///     c) 计算 C_x = G * h^{r_x} mod n^2（加上开口随机数的盲化）。
+///   - 使用参数中的固定基 g 计算承诺：
+///     C = g^{sum(a_i)} * h^{r_x} mod n^2。
 ///
 /// Step 4: 返回承诺值 C_x。
 pub fn commit(
@@ -65,45 +61,32 @@ pub fn commit(
 ) -> PolyCommitment {
     let cpar = &lambda.cpar;
     let n = &cpar.n;
-    let n2 = &cpar.n2;
 
     // Step 2: P <- s * ∏(x - x_i)，展开为系数向量
     let coeffs = expand_roots_to_coefficients_mod_n(x, s, n)
         .expect("expand_roots_to_coefficients_mod_n failed");
 
-    // Step 3: 采样随机基并计算承诺
-    let mut rng = OsRng;
-    let g_bases: Vec<BigUint> = (0..coeffs.len())
-        .map(|_| sample_unit_mod_n2(&mut rng, n2))
-        .collect();
-
-    // 计算 C_x = (∏ g_i^{a_i}) * h^{r_x} mod n^2
-    commit_with_bases(cpar, &coeffs, &g_bases, r_x)
+    // Step 3: 使用参数中的固定基 g 计算承诺
+    commit_with_bases(cpar, &coeffs, r_x)
 }
 
-/// 内部辅助：使用指定的 g_bases 计算承诺。
+/// 内部辅助：使用参数中的固定基 g 计算承诺。
 ///
-/// 公式：C = (∏_{i} g_i^{coeffs[i]}) * h^{r_x} mod n^2
-///
-/// 该函数接受外部传入的 g_bases，便于测试时使用确定性基进行精确验证。
+/// 公式：C = g^{sum(coeffs)} * h^{r_x} mod n^2
 fn commit_with_bases(
     cpar: &rust::DfParams,
     coeffs: &[BigUint],
-    g_bases: &[BigUint],
     r_x: &BigUint,
 ) -> PolyCommitment {
     let n2 = &cpar.n2;
 
-    // G = ∏ g_i^{a_i} mod n^2
-    let g_product = g_bases.iter()
-        .zip(coeffs.iter())
-        .fold(BigUint::from(1u32), |acc, (gi, ai)| {
-            (acc * gi.modpow(ai, n2)) % n2
-        });
+    // sum(a_i)
+    let coeff_sum: BigUint = coeffs.iter().fold(BigUint::from(0u32), |acc, ai| acc + ai);
 
-    // C_x = G * h^{r_x} mod n^2
+    // C = g^{sum(a_i)} * h^{r_x} mod n^2
+    let g_sum = cpar.g.modpow(&coeff_sum, n2);
     let h_rx = cpar.h.modpow(r_x, n2);
-    let c_x = (&g_product * &h_rx) % n2;
+    let c_x = (&g_sum * &h_rx) % n2;
 
     PolyCommitment {
         c: c_x,
@@ -284,29 +267,19 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32)];
         let s = BigUint::from(1u32);
 
-        // 使用相同的 g_bases 以确保差异仅来自 r_x
-        let n = &lambda.cpar.n;
-        let n2 = &lambda.cpar.n2;
-        let coeffs = expand_roots_to_coefficients_mod_n(&x, &s, n).unwrap();
-        let mut rng = OsRng;
-        let g_bases: Vec<BigUint> = (0..coeffs.len())
-            .map(|_| sample_unit_mod_n2(&mut rng, n2))
-            .collect();
-
-        let pc1 = commit_with_bases(&lambda.cpar, &coeffs, &g_bases, &BigUint::from(10u32));
-        let pc2 = commit_with_bases(&lambda.cpar, &coeffs, &g_bases, &BigUint::from(20u32));
+        let pc1 = commit(&lambda, &x, &BigUint::from(10u32), &s);
+        let pc2 = commit(&lambda, &x, &BigUint::from(20u32), &s);
 
         assert_ne!(pc1.c, pc2.c, "different r_x should yield different commitments");
     }
 
     // ================================================================
-    // 测试 5: 使用确定性 g_bases 验证承诺公式
+    // 测试 5: 使用固定基 g 验证承诺公式
     // ================================================================
 
-    /// 验证 C = (∏ g_i^{a_i}) * h^{r_x} mod n^2。
-    /// 使用固定的 g_bases 手动重算并比对。
+    /// 验证 C = g^{sum(a_i)} * h^{r_x} mod n^2。
     #[test]
-    fn test_commitment_formula_with_fixed_bases() {
+    fn test_commitment_formula_with_fixed_base() {
         let lambda = test_lambda();
         let cpar = &lambda.cpar;
         let n = &cpar.n;
@@ -316,54 +289,35 @@ mod tests {
         let s = BigUint::from(1u32);
         let r_x = BigUint::from(7u32);
 
-        // 先计算系数
-        let coeffs = expand_roots_to_coefficients_mod_n(&x, &s, n).unwrap();
+        let pc = commit(&lambda, &x, &r_x, &s);
 
-        // 使用固定 g_bases
-        let g0 = BigUint::from(12345u32);
-        let g1 = BigUint::from(67890u32);
-        let g2 = BigUint::from(11111u32);
-        let g_bases = vec![g0.clone(), g1.clone(), g2.clone()];
-
-        let pc = commit_with_bases(cpar, &coeffs, &g_bases, &r_x);
-
-        // 手动计算：G = g0^{a0} * g1^{a1} * g2^{a2} mod n^2
-        let g0_a0 = g0.modpow(&coeffs[0], n2);
-        let g1_a1 = g1.modpow(&coeffs[1], n2);
-        let g2_a2 = g2.modpow(&coeffs[2], n2);
-        let g_product = (((&g0_a0 * &g1_a1) % n2) * &g2_a2) % n2;
-
+        // 手动计算：coeffs = [6, n-5, 1], sum = 6 + (n-5) + 1 = n + 2
+        let coeff_sum: BigUint = pc.coeffs.iter().fold(BigUint::from(0u32), |acc, a| acc + a);
+        let g_sum = cpar.g.modpow(&coeff_sum, n2);
         let h_rx = cpar.h.modpow(&r_x, n2);
-        let expected_c = (&g_product * &h_rx) % n2;
+        let expected_c = (&g_sum * &h_rx) % n2;
 
         assert_eq!(pc.c, expected_c, "commitment should match manual computation");
     }
 
-    /// 验证 r_x = 0 时，C = ∏ g_i^{a_i}（无 h 分量）。
+    /// 验证 r_x = 0 时，C = g^{sum(a_i)}（无 h 分量）。
     #[test]
     fn test_commitment_zero_opening() {
         let lambda = test_lambda();
         let cpar = &lambda.cpar;
-        let n = &cpar.n;
         let n2 = &cpar.n2;
 
         let x = vec![BigUint::from(5u32)];
         let s = BigUint::from(2u32);
         let r_x = BigUint::from(0u32);
 
-        let coeffs = expand_roots_to_coefficients_mod_n(&x, &s, n).unwrap();
-        let g_bases = vec![BigUint::from(999u32), BigUint::from(888u32)];
+        let pc = commit(&lambda, &x, &r_x, &s);
 
-        let pc = commit_with_bases(cpar, &coeffs, &g_bases, &r_x);
+        // h^0 = 1，所以 C = g^{sum(a_i)}
+        let coeff_sum: BigUint = pc.coeffs.iter().fold(BigUint::from(0u32), |acc, a| acc + a);
+        let expected = cpar.g.modpow(&coeff_sum, n2);
 
-        // h^0 = 1，所以 C = G = g0^{a0} * g1^{a1}
-        let g_product = g_bases.iter()
-            .zip(coeffs.iter())
-            .fold(BigUint::from(1u32), |acc, (gi, ai)| {
-                (acc * gi.modpow(ai, n2)) % n2
-            });
-
-        assert_eq!(pc.c, g_product, "with r_x=0, commitment should equal G product");
+        assert_eq!(pc.c, expected, "with r_x=0, commitment should equal g^(sum(a_i))");
     }
 
     // ================================================================

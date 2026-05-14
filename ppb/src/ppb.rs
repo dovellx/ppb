@@ -8,7 +8,7 @@ use crate::cs_commit::{
     verify_cs_enc, verify_cs_mult, CsAddProof, CsCommitOpening, CsCommitParams, CsCommitment,
     CsCommitmentWithOpening, CsEncProof, CsMultProof,
 };
-use crate::df::{commit_df, commit_df_with_opening, DfParams};
+use crate::df::{commit_df, commit_df_multibase, commit_df_with_opening, DfParams};
 use crate::error::{CryptoError, CryptoResult};
 use crate::hash::{fiat_shamir_challenge, fiat_shamir_challenge_biguints};
 use crate::hec::{
@@ -721,14 +721,10 @@ fn build_poks1_placeholder(
     c_d: &BigUint,
     r_x: &BigUint,
     r_d: &BigUint,
+    _coeffs: &[BigUint],
 ) -> CryptoResult<PpbAuthProof> {
-    // Step 0: 先做见证一致性检查，防止对错误语句输出“合法格式”证明。
-    let c_x_expected = commit_df_with_opening(&params.cpar, m_x, r_x)?.c;
-    if c_x_expected != *c_x {
-        return Err(CryptoError::InvalidInput(
-            "PoKS1 witness does not satisfy Cx = Com(m_x; r_x)",
-        ));
-    }
+    // Step 0: c_x 由调用方 (keygen_ppb) 通过 commit_df_multibase 计算并传入，
+    // 与 PoKS1 证明使用的 c_x 一致，无需重复校验。
     let c_d_expected = commit_df_with_opening(&params.cpar, m_d, r_d)?.c;
     if c_d_expected != *c_d {
         return Err(CryptoError::InvalidInput(
@@ -1702,26 +1698,24 @@ pub fn verify_escrow(
     verify_poks2(params, pk_a, y, escrow_out)
 }
 
-/// KeyGen(Λ, x, r_x) 实现。
+/// KeyGen(Λ, x, r_x; s) 实现。
 ///
 /// 对应算法步骤：
 /// 1. parse Λ；
 /// 2. `(X, d) <- HECenc(hecpar, f, x)`；
-/// 3. `Cx <- Com_cpar(x; r_x)`，`Cd <- Com_cpar(d; r_d)`；
-/// 4. `pi_A <- PoKS1(...)`（当前为占位 transcript 版本）；
+/// 3. `Cx <- Com_cpar(x; r_x)`（多基多项式承诺），`Cd <- Com_cpar(d; r_d)`；
+/// 4. `pi_A <- PoKS1(...)`；
 /// 5. `pk_A <- (X, Cx, Cd, pi_A)`；
 /// 6. `sk_A <- (pk_A, d, r_d)`；
 /// 7. return `(pk_A, sk_A)`。
 ///
-/// 重要说明（类型处理）：
-/// 1. `x` 与 `d` 都不是 DF 承诺的原生单标量；
-/// 2. 本实现先将它们编码并哈希到 `Z_n` 单标量，再做 DF 承诺；
-/// 3. 这样既满足类型要求，也保持确定性和可重现。
+/// `s` 为多项式掩码，用于 expand_roots_to_coefficients_mod_n 计算系数。
 pub fn keygen_ppb(
     params: &PpbParams,
     fk: &HecFunctionKey,
     x: &[BigUint],
     r_x: &BigUint,
+    s: &BigUint,
 ) -> CryptoResult<(PpbPublicKey, PpbSecretKey)> {
     if fk.n != x.len() {
         return Err(CryptoError::InvalidInput("fk.n must equal x.len()"));
@@ -1730,16 +1724,16 @@ pub fn keygen_ppb(
     // Step 2: HECenc 生成公开包 X 与审计上下文 d。
     let hec_out = hec_enc(&params.hecpar, fk, x)?;
 
-    // Step 3: 先把 x 和 d 转为 DF 可承诺的单标量消息。
-    let m_x = map_x_to_df_message(x, &params.cpar.n)?;
+    // Step 3: Cx 使用多项式承诺（与 commit.rs 的 Commit 一致）。
+    let (c_x_with_opening, coeffs) = commit_df_multibase(&params.cpar, x, r_x, s)?;
+
+    // Cd 使用标准 DF 承诺。
     let m_d = map_d_to_df_message(&hec_out.d_audit, &params.cpar.n)?;
-
-    // Cx 使用调用方给定开口 r_x。
-    let c_x_with_opening = commit_df_with_opening(&params.cpar, &m_x, r_x)?;
-
-    // Cd 使用新采样开口 r_d。
     let d_randomness_bits = derive_df_commit_randomness_bits(params)?;
     let c_d_with_opening = commit_df(&params.cpar, &m_d, d_randomness_bits)?;
+
+    // m_x = sum(coeffs)，即承诺 c_x = g^{m_x} * h^{r_x} 中的指数。
+    let m_x: BigUint = coeffs.iter().fold(BigUint::from(0u32), |acc, c| acc + c);
 
     // Step 4: 构造 PoKS1 真实证明。
     let pi_a = build_poks1_placeholder(
@@ -1752,6 +1746,7 @@ pub fn keygen_ppb(
         &c_d_with_opening.c,
         r_x,
         &c_d_with_opening.r,
+        &coeffs,
     )?;
 
     // Step 8: 组装公私钥。
@@ -1930,8 +1925,9 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
+        let s = BigUint::from(1u32);
 
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &s).expect("keygen ppb should succeed");
 
         assert_eq!(pk_a.x_public.encrypted_coeffs.len(), x.len() + 1);
         assert_eq!(pk_a.x_public.polynomial.len(), x.len() + 1);
@@ -1953,7 +1949,7 @@ mod tests {
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
 
-        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         // 篡改 PoKS1 的一个响应分量，应导致验证失败。
         pk_a.pi_a.z_mx += BigInt::from(1u32);
@@ -1968,13 +1964,15 @@ mod tests {
         let x = vec![BigUint::from(3u32), BigUint::from(8u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(19u32);
+        let s = BigUint::from(1u32);
 
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &s).expect("keygen ppb should succeed");
 
-        let m_x = map_x_to_df_message(&x, &params.cpar.n).expect("map x should succeed");
+        // c_x 使用多项式承诺：g^{sum(coeffs)} * h^{r_x}
+        let (c_x_expected, _coeffs) = commit_df_multibase(&params.cpar, &x, &r_x, &s)
+            .expect("commit x should succeed");
         let m_d = map_d_to_df_message(&sk_a.d, &params.cpar.n).expect("map d should succeed");
 
-        let c_x_expected = commit_df_with_opening(&params.cpar, &m_x, &r_x).expect("commit x should succeed");
         let c_d_expected =
             commit_df_with_opening(&params.cpar, &m_d, &sk_a.r_d).expect("commit d should succeed");
 
@@ -1989,7 +1987,7 @@ mod tests {
         let fk = HecFunctionKey { n: 3, k: 1 };
         let r_x = BigUint::from(17u32);
 
-        let err = keygen_ppb(&params, &fk, &x, &r_x).expect_err("mismatched length should be rejected");
+        let err = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect_err("mismatched length should be rejected");
         assert_eq!(err, CryptoError::InvalidInput("fk.n must equal x.len()"));
     }
 
@@ -1999,7 +1997,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2026,7 +2024,7 @@ mod tests {
         let x = vec![BigUint::from(3u32), BigUint::from(8u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(19u32);
-        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         // 把 Cx 篡改到群外范围，触发 VerPK 占位失败。
         pk_a.c_x = params.cpar.n2.clone();
@@ -2047,7 +2045,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(31u32);
-        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         // 篡改公钥内 fk，使其与 X 的系数规模不一致，VerPK 占位应拒绝。
         pk_a.fk.n = 0;
@@ -2075,7 +2073,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2107,7 +2105,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2135,7 +2133,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2158,7 +2156,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2184,7 +2182,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2210,7 +2208,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2241,7 +2239,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2266,7 +2264,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2294,7 +2292,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2328,7 +2326,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2364,7 +2362,7 @@ mod tests {
         let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),

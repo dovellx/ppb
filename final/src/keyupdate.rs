@@ -103,12 +103,12 @@ pub fn key_update(
 
         // Step 17: (pk'_Λ1, sk'_Λ1) ← BLUE.KeyGen(Λ_BLUE, x'_1, r'_x1; s'_1)
         let fk1 = HecFunctionKey { n: x1_prime.len(), k: 1 };
-        let (pk1_prime, sk1_prime) = keygen_ppb(&lambda.lambda_blue, &fk1, x1_prime, r_x1_prime)
+        let (pk1_prime, sk1_prime) = keygen_ppb(&lambda.lambda_blue, &fk1, x1_prime, r_x1_prime, s1_prime)
             .expect("BLUE.KeyGen for x'_1 failed");
 
         // Step 18: (pk'_Λ2, sk'_Λ2) ← BLUE.KeyGen(Λ_BLUE, x'_2, r'_x2; s'_2)
         let fk2 = HecFunctionKey { n: x2_prime.len(), k: 1 };
-        let (pk2_prime, sk2_prime) = keygen_ppb(&lambda.lambda_blue, &fk2, x2_prime, r_x2_prime)
+        let (pk2_prime, sk2_prime) = keygen_ppb(&lambda.lambda_blue, &fk2, x2_prime, r_x2_prime, s2_prime)
             .expect("BLUE.KeyGen for x'_2 failed");
 
         // Step 19: pk'_SPS, sk'_SPS ← SPS.KGen(pp)
@@ -155,7 +155,7 @@ pub fn key_update(
 
         // Step 27: (pk'_Λ2, sk'_Λ2) ← BLUE.KeyGen(Λ_BLUE, x'_2, r'_x2; s'_2)
         let fk2 = HecFunctionKey { n: x2_prime.len(), k: 1 };
-        let (pk2_prime, sk2_prime) = keygen_ppb(&lambda.lambda_blue, &fk2, x2_prime, r_x2_prime)
+        let (pk2_prime, sk2_prime) = keygen_ppb(&lambda.lambda_blue, &fk2, x2_prime, r_x2_prime, s2_prime)
             .expect("BLUE.KeyGen for x'_2 failed");
 
         // Step 28: C'_x1 = C_x1（复用旧承诺）

@@ -67,6 +67,37 @@ pub fn commit_df_with_opening(params: &DfParams, m: &BigUint, r: &BigUint) -> Cr
     Ok(DfCommitment { c, r: r.clone() })
 }
 
+/// DF 多项式承诺：对输入列表 x 和掩码 s 计算多项式系数，
+/// 使用参数中的固定基 g 计算承诺。
+///
+/// 对应 Algorithm 1: Commit(Λ, x, r_x; s) -> C_x
+///
+/// 过程：
+/// 1. P <- s * ∏(x - x_i)，展开为系数向量 coeffs；
+/// 2. C = g^{sum(coeffs)} * h^{r} mod n^2。
+///
+/// 返回承诺值 C 和系数向量 coeffs。
+pub fn commit_df_multibase(
+    params: &DfParams,
+    x: &[BigUint],
+    r: &BigUint,
+    s: &BigUint,
+) -> CryptoResult<(DfCommitment, Vec<BigUint>)> {
+    // Step 1: P <- s * ∏(x - x_i)，展开为系数向量
+    let coeffs = crate::hec::expand_roots_to_coefficients_mod_n(x, s, &params.n)
+        .map_err(|_| CryptoError::InvalidInput("expand_roots_to_coefficients_mod_n failed"))?;
+
+    // Step 2: sum(a_i)
+    let coeff_sum: BigUint = coeffs.iter().fold(BigUint::from(0u32), |acc, ai| acc + ai);
+
+    // Step 3: C = g^{sum(a_i)} * h^r mod n^2
+    let g_sum = params.g.modpow(&coeff_sum, &params.n2);
+    let hr = params.h.modpow(r, &params.n2);
+    let c = (g_sum * hr) % &params.n2;
+
+    Ok((DfCommitment { c, r: r.clone() }, coeffs))
+}
+
 #[cfg(test)]
 mod tests {
     use num_bigint::BigUint;

@@ -31,7 +31,7 @@ pub use cs_commit::{
 	CsCommitOpening,
 	CsCommitParams,
 };
-pub use df::{commit_df, commit_df_with_opening, setup_df, DfCommitment, DfParams};
+pub use df::{commit_df, commit_df_multibase, commit_df_with_opening, setup_df, DfCommitment, DfParams};
 pub use error::{CryptoError, CryptoResult};
 pub use hec::{
 	expand_roots_to_coefficients_mod_n,
@@ -77,6 +77,7 @@ pub use ppb::{
 	escrow_ppb,
 	keygen_ppb,
 	setup_ppb,
+	verify_pk,
 	PpbAuthProof,
 	PpbDecOutput,
 	PpbDecProof,

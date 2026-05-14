@@ -2,6 +2,7 @@ mod commit;
 mod keygen;
 mod keyupdate;
 mod setup;
+mod verpk;
 
 use num_bigint::BigUint;
 

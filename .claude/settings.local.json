@@ -3,7 +3,9 @@
     "allow": [
       "mcp__mcp-router__read_file",
       "mcp__mcp-router__list_directory",
-      "Bash(cargo build *)"
+      "Bash(cargo build *)",
+      "Skill(superpowers:brainstorming)",
+      "Skill(superpowers:brainstorming:*)"
     ]
   }
 }

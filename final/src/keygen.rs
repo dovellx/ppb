@@ -95,14 +95,14 @@ pub fn keygen(
         // Step 11: (pk_Λ1, sk_Λ1) ← BLUE.KeyGen(Λ_BLUE, x1, r_x1; s1)
         // ============================================================
         let fk1 = HecFunctionKey { n: x1.len(), k: 1 };
-        let (pk1, sk1) = keygen_ppb(&lambda.lambda_blue, &fk1, x1, r_x1)
+        let (pk1, sk1) = keygen_ppb(&lambda.lambda_blue, &fk1, x1, r_x1, s1)
             .expect("BLUE.KeyGen for x1 failed");
 
         // ============================================================
         // Step 12: (pk_Λ2, sk_Λ2) ← BLUE.KeyGen(Λ_BLUE, x2, r_x2; s2)
         // ============================================================
         let fk2 = HecFunctionKey { n: x2.len(), k: 1 };
-        let (pk2, sk2) = keygen_ppb(&lambda.lambda_blue, &fk2, x2, r_x2)
+        let (pk2, sk2) = keygen_ppb(&lambda.lambda_blue, &fk2, x2, r_x2, s2)
             .expect("BLUE.KeyGen for x2 failed");
 
         // ============================================================
@@ -154,7 +154,7 @@ pub fn keygen(
         // Step 20: (pk_Λ2, sk_Λ2) ← BLUE.KeyGen(Λ_BLUE, x, r_x2; s2)
         // ============================================================
         let fk2 = HecFunctionKey { n: l, k: 1 };
-        let (pk2, sk2) = keygen_ppb(&lambda.lambda_blue, &fk2, x, r_x2)
+        let (pk2, sk2) = keygen_ppb(&lambda.lambda_blue, &fk2, x, r_x2, s2)
             .expect("BLUE.KeyGen for x failed");
 
         // ============================================================

@@ -17,7 +17,7 @@ fn test_ppb_system_full_flow_in_order() {
     let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
     let fk = HecFunctionKey { n: x.len(), k: 1 };
     let r_x = BigUint::from(37u32);
-    let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen should succeed");
+    let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen should succeed");
 
     // 3) escrow：用户提交待托管输入 y，并生成/验证 escrow 侧证明对象。
     let y = HecEvalInput {
@@ -69,7 +69,7 @@ fn test_ppb_system_judge_rejects_tampered_dec_proof() {
     let x = vec![BigUint::from(7u32), BigUint::from(19u32), BigUint::from(23u32)];
     let fk = HecFunctionKey { n: x.len(), k: 1 };
     let r_x = BigUint::from(43u32);
-    let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x).expect("keygen should succeed");
+    let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen should succeed");
 
     let y = HecEvalInput {
         y_id: BigUint::from(17u32),

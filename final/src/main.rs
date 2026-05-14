@@ -1,5 +1,6 @@
 mod commit;
 mod keygen;
+mod keyupdate;
 mod setup;
 
 use num_bigint::BigUint;

@@ -1,4 +1,5 @@
 mod commit;
+mod endorse;
 mod escrow1;
 mod keygen;
 mod keyupdate;

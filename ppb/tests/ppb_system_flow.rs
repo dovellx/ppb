@@ -31,7 +31,7 @@ fn test_ppb_system_full_flow_in_order() {
         .expect("escrow should pass verification");
 
     // 4) dec：先验证 escrow，再解密得到 z，并返回 PoKS3 证明。
-    let dec_out = dec_ppb(&params, &sk_a, &y, &escrow_out)
+    let dec_out = dec_ppb(&params, &sk_a, &escrow_out.c_y, &escrow_out)
         .expect("dec should run")
         .expect("dec should return output after successful escrow verification");
 
@@ -80,7 +80,7 @@ fn test_ppb_system_judge_rejects_tampered_dec_proof() {
         .expect("escrow should run")
         .expect("escrow should pass verification");
 
-    let mut dec_out = dec_ppb(&params, &sk_a, &y, &escrow_out)
+    let mut dec_out = dec_ppb(&params, &sk_a, &escrow_out.c_y, &escrow_out)
         .expect("dec should run")
         .expect("dec should return output");
 

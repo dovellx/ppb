@@ -115,9 +115,9 @@ pub fn escrow1(
         // 然后使用 DF 承诺方案计算 C_y1 = g^{m_y} * h^{r_y1} mod n^2。
         let n = &lambda.cpar.n;
         let m_y = map_y_to_scalar(y, n);
-        let c_y1 = lambda.cpar.g.modpow(&m_y, &lambda.cpar.n2)
-            * lambda.cpar.h.modpow(r_y1, &lambda.cpar.n2);
-        let c_y1 = c_y1 % &lambda.cpar.n2;
+        // 调用 df.rs 中的 commit_df_with_opening 计算 C_y1 = g^{m_y} * h^{r_y1} mod n^2
+        let c_y1 = rust::commit_df_with_opening(&lambda.cpar, &m_y, r_y1)
+            .expect("DF commitment computation failed");
 
         // ============================================================
         // Step 7: C*_y1 ← COM*.Com(cpar*, y; r*_y1)
@@ -145,7 +145,7 @@ pub fn escrow1(
         // ============================================================
         Escrow1Output {
             z1: Some(z1),
-            c_y1: Some(c_y1),
+            c_y1: Some(c_y1.c),
             c_star_y1: Some(c_star_y1),
         }
     } else {

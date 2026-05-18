@@ -284,7 +284,7 @@ mod tests {
         let update_out = crate::escrow_update::escrow_update(
             &lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1_old, &z_old,
             &pk_prime, &r_y1_prime, &r_y2_prime, &r_star_y1_prime,
-            &sk_prime, &x_prime,
+            sigma_y_old, &sk_prime, &x_prime,
         )
         .expect("Escrow update should succeed");
 
@@ -343,7 +343,7 @@ mod tests {
         let update_out = crate::escrow_update::escrow_update(
             &lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1_old, &z_old,
             &pk_prime, &BigUint::from(0u32), &r_y2_prime, &BigUint::from(0u32),
-            &sk_prime, &x_prime,
+            sigma_y_old, &sk_prime, &x_prime,
         )
         .expect("Escrow update should succeed");
 

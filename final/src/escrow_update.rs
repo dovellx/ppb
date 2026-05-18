@@ -13,13 +13,15 @@
 //!
 //! **分支 2**（pk'_Λ1 = pk_Λ1 且 pk'_Λ2 ≠ pk_Λ2）—— 仅后半部分更新：
 //!   - 复用旧的 Pedersen 承诺随机数 r*_y1 和承诺值 C*_y1；
-//!   - 从旧 Z 中提取签名 σ*_y；
+//!   - 使用用户传入的签名 σ_y；
 //!   - 直接调用 Escrow2，无需 Auditor 交互。
 //!
 //! **隐含分支**（pk'_Λ1 = pk_Λ1 且 pk'_Λ2 = pk_Λ2）—— 公钥未变化：
 //!   - 无需更新，返回错误。
 
 use num_bigint::BigUint;
+
+use mercurial_signature::Signature as MsSignature;
 
 use crate::endorse;
 use crate::escrow1;
@@ -56,15 +58,16 @@ pub struct EscrowUpdateOutput {
 /// 4. `r_star_y1`：旧 Pedersen 承诺随机数 r*_y1（分支 2 使用）；
 /// 5. `r_y2`：旧 DF 承诺随机数 r_y2（当前未直接使用，保留接口一致性）；
 /// 6. `c_star_y1`：旧 Pedersen 承诺 C*_y1（分支 2 使用）；
-/// 7. `z`：旧 Escrow2 输出 Z（分支 2 需要从中提取 σ*_y）；
+/// 7. `z`：旧 Escrow2 输出 Z；
 /// 8. `pk_prime`：新公钥 pk'_Λ；
 /// 9. `r_y1_prime`：新 DF 承诺随机数 r'_y1（分支 1 使用）；
 /// 10. `r_y2_prime`：新 DF 承诺随机数 r'_y2；
-/// 11. `r_star_y1_prime`：新 Pedersen 承诺随机数 r*_y1'（分支 1 使用）。
+/// 11. `r_star_y1_prime`：新 Pedersen 承诺随机数 r*_y1'（分支 1 使用）；
+/// 12. `sigma_y`：签名 σ_y（分支 2 使用，由用户直接传入）。
 ///
 /// 输入（Auditor 侧）：
-/// 12. `sk_prime`：新私钥 sk'_Λ；
-/// 13. `x_prime`：新名单 x'。
+/// 13. `sk_prime`：新私钥 sk'_Λ；
+/// 14. `x_prime`：新名单 x'。
 ///
 /// 输出：Some((Z', C'_y2, (r'_y2, r*_y1'))) 或 None（验证失败时）。
 #[allow(clippy::too_many_arguments)]
@@ -81,6 +84,7 @@ pub fn escrow_update(
     r_y1_prime: &BigUint,
     r_y2_prime: &BigUint,
     r_star_y1_prime: &BigUint,
+    sigma_y: &MsSignature,
     // === Auditor 输入 ===
     sk_prime: &SecretKey,
     x_prime: &[BigUint],
@@ -205,11 +209,7 @@ pub fn escrow_update(
         // ============================================================
         // Step 14: (M*_1, σ*_y) = Z*_1
         // ============================================================
-        // 从旧 Escrow2 输出 Z 中提取 Z'_1，其中包含旧签名 σ*_y。
-        // 注意：必须使用 original_sig（ChangeRep 前的原始签名），
-        // 因为 Escrow2 内部会再次验证签名并执行 ChangeRep。
-        let z1_prime_ref = z.z1_prime.as_ref()?;
-        let sigma_star_y = &z1_prime_ref.original_sig;
+        // 直接使用用户传入的签名 σ_y（不再从 Z*_1 中提取）。
 
         // ============================================================
         // Step 15: Z', C'_y2 ← Escrow2(Λ, pk'_Λ, y, r*_y1', r'_y2, C*_y1', σ*_y)
@@ -225,7 +225,7 @@ pub fn escrow_update(
             r_star_y1_new,
             r_y2_prime,
             c_star_y1_new,
-            sigma_star_y,
+            sigma_y,
         ) {
             Some(out) => out,
             None => {
@@ -376,6 +376,7 @@ mod tests {
             &r_y1_prime,
             &r_y2_prime,
             &r_star_y1_prime,
+            sigma_y_old,
             &sk_prime,
             &x_prime,
         )
@@ -462,6 +463,7 @@ mod tests {
             &BigUint::from(0u32), // r_y1_prime，分支 2 不使用
             &r_y2_prime,
             &BigUint::from(0u32), // r_star_y1_prime，分支 2 不使用
+            sigma_y_old,
             &sk_prime,
             &x_prime,
         )
@@ -523,6 +525,7 @@ mod tests {
             &BigUint::from(0u32),
             &BigUint::from(0u32),
             &BigUint::from(0u32),
+            sigma_y_old,
             &sk,
             &x,
         );

@@ -1,6 +1,7 @@
 mod commit;
 mod endorse;
 mod escrow1;
+mod escrow2;
 mod keygen;
 mod keyupdate;
 mod setup;

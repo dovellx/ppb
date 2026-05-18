@@ -24,7 +24,7 @@ pub type CamenischShoupCiphertext = CsCiphertext;
 /// 1. 将多项式层面的操作（求值、劈裂、折叠）封装成固定 API；
 /// 2. 后续 `pok_star_p` 只通过该结构体方法操作多项式，避免散落逻辑；
 /// 3. `n2` 内置到结构体中，确保同态运算始终在同一模数下执行。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CiphertextPolynomial {
     coeffs: Vec<CamenischShoupCiphertext>,
     n2: BigUint,

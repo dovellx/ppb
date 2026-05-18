@@ -55,7 +55,7 @@ pub struct PpbAuthProof {
 /// 额外字段说明：
 /// 1. `fk` 用于显式保存 KeyGen 时 `HECenc` 使用的函数键；
 /// 2. Escrow 阶段调用 `HECeval` 时必须复用该 `fk`，避免从 `X` 反推造成语义歧义。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PpbPublicKey {
     pub x_public: HecPublicPackage,
     pub fk: HecFunctionKey,

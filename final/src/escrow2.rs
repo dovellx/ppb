@@ -32,12 +32,15 @@ use crate::setup::Lambda;
 ///
 /// 字段语义：
 /// 1. `msg`：变换后的消息 M' = µ · M（每个 G1 点乘以标量 µ）；
-/// 2. `sig`：变换后的签名 σ'_y。
+/// 2. `sig`：变换后的签名 σ'_y；
+/// 3. `original_sig`：变换前的原始签名 σ_y（供 Escrow Update 分支 2 复用）。
 pub struct EscrowZ1Prime {
     /// M' = (µ · C*_y1, µ · inv)。
     pub msg: Vec<G1Projective>,
     /// σ'_y = SPS.ChangeRep(σ_y, µ; r)。
     pub sig: MsSignature,
+    /// σ_y，原始签名（ChangeRep 之前）。Escrow Update 分支 2 需要复用此值。
+    pub original_sig: MsSignature,
 }
 
 /// Algorithm 8: Escrow2 的输出结果。
@@ -167,6 +170,8 @@ pub fn escrow2(
             // 变换后的 (M', σ'_y) 仍然满足验证等式。
             let mut msg_mut = msg.clone();
             let mut sig_mut = sigma_y.clone();
+            // 保存原始签名，供 Escrow Update 分支 2 复用。
+            let original_sig = sigma_y.clone();
             mercurial_signature::change_representation(&mut rng, &mut msg_mut, &mut sig_mut, mu);
 
             // ============================================================
@@ -175,6 +180,7 @@ pub fn escrow2(
             let z1_prime = Some(EscrowZ1Prime {
                 msg: msg_mut,
                 sig: sig_mut,
+                original_sig,
             });
 
             // ============================================================

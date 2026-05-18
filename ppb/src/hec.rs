@@ -31,7 +31,7 @@ pub struct HecFunctionKey {
 /// HECenc 的公开输出 X = (pkAH, A1, ..., A_{n+1})。
 ///
 /// 为了后续直接对接 `Algorithm 2`，这里额外封装了 `CiphertextPolynomial`。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HecPublicPackage {
     pub pk_ah: CsPubKey,
     pub encrypted_coeffs: Vec<CamenischShoupCiphertext>,

@@ -21,7 +21,7 @@ pub struct CsParams {
 }
 
 /// CS 公钥：k = |g^x| mod n^2。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsPubKey {
     pub k: BigUint,
 }
@@ -33,7 +33,7 @@ pub struct CsSecretKey {
 }
 
 /// CS 密文：c = (c0, c1)。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CsCiphertext {
     pub c0: BigUint,
     pub c1: BigUint,

@@ -91,10 +91,33 @@ pub fn enc_cs(params: &CsParams, pk: &CsPubKey, m: &BigUint) -> CryptoResult<CsC
     }
     let r = rng.gen_biguint_range(&BigUint::one(), &upper);
 
-    let c0_raw = params.g.modpow(&r, &params.n2);
+    enc_cs_with_randomness(params, pk, m, &r)
+}
+
+/// 使用指定随机数执行 CS 加密：Enc(pk, m; r)。
+///
+/// 该 helper 供 HEC/PPB 证明代码复用：证明生成器需要重建“某个公开密文
+/// 正是用 witness 中的随机数加密得到的”，因此不能只调用内部采样随机数的
+/// `enc_cs`。随机数统一映射到 `Z_n`，密文分量仍规约为 `|QR_{n^2}|`
+/// 代表元，从而与 `enc_cs` 的输出语义完全一致。
+pub(crate) fn enc_cs_with_randomness(
+    params: &CsParams,
+    pk: &CsPubKey,
+    m: &BigUint,
+    r: &BigUint,
+) -> CryptoResult<CsCiphertext> {
+    if m >= &params.n {
+        return Err(CryptoError::InvalidInput("message must be in [0, n)"));
+    }
+    if params.n2.is_zero() {
+        return Err(CryptoError::InvalidInput("n^2 must be non-zero"));
+    }
+
+    let r_mod = r % &params.n;
+    let c0_raw = params.g.modpow(&r_mod, &params.n2);
     let c0 = abs_qr_rep(&c0_raw, &params.n2);
 
-    let kr = pk.k.modpow(&r, &params.n2);
+    let kr = pk.k.modpow(&r_mod, &params.n2);
     let hm = params.h.modpow(m, &params.n2);
     let c1_raw = (kr * hm) % &params.n2;
     let c1 = abs_qr_rep(&c1_raw, &params.n2);

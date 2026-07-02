@@ -44,7 +44,15 @@ fn test_ppb_system_full_flow_in_order() {
     assert_eq!(z.y_at, y.y_at % &params.cpar.n);
 
     // dec 输出的 PoKS3 必须可独立通过验证。
-    let poks3_ok = verify_poks3(&params, &pk_a.c_d, &dec_out.pi_z).expect("verify_poks3 should run");
+    let poks3_ok = verify_poks3(
+        &params,
+        &pk_a.x_public.pk_ah,
+        &pk_a.c_d,
+        &escrow_out.z_hat,
+        &z,
+        &dec_out.pi_z,
+    )
+    .expect("verify_poks3 should run");
     assert!(poks3_ok);
 
     // 5) judge：最终裁决合取验证（VS3 ∧ VerPK ∧ VerEscrow）应为真。
@@ -72,7 +80,7 @@ fn test_ppb_system_judge_rejects_tampered_dec_proof() {
     let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen should succeed");
 
     let y = HecEvalInput {
-        y_id: BigUint::from(17u32),
+        y_id: BigUint::from(19u32),
         y_at: BigUint::from(31u32),
     };
     let r_y = BigUint::from(53u32);
@@ -99,5 +107,42 @@ fn test_ppb_system_judge_rejects_tampered_dec_proof() {
     .expect("judge should run");
 
     // 最终裁决必须为 false，确保篡改证明不会被误接受。
+    assert!(!judge_ok);
+}
+
+#[test]
+fn test_ppb_system_judge_rejects_tampered_public_z() {
+    // 反例目标：只篡改 dec 公开输出 z，不改证明本体，S3 必须拒绝。
+    let params = setup_ppb(64, &(), &(), &()).expect("setup should succeed");
+    let x = vec![BigUint::from(7u32), BigUint::from(19u32), BigUint::from(23u32)];
+    let fk = HecFunctionKey { n: x.len(), k: 1 };
+    let r_x = BigUint::from(43u32);
+    let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen should succeed");
+
+    let y = HecEvalInput {
+        y_id: BigUint::from(19u32),
+        y_at: BigUint::from(31u32),
+    };
+    let r_y = BigUint::from(53u32);
+    let escrow_out = escrow_ppb(&params, &pk_a, &y, &r_y)
+        .expect("escrow should run")
+        .expect("escrow should pass verification");
+
+    let mut dec_out = dec_ppb(&params, &sk_a, &escrow_out.c_y, &escrow_out)
+        .expect("dec should run")
+        .expect("dec should return output");
+    dec_out.z.as_mut().expect("z should exist").y_id += BigUint::from(1u32);
+
+    let judge_ok = judge_ppb(
+        &params,
+        &pk_a,
+        &pk_a.c_x,
+        &escrow_out.c_y,
+        &escrow_out,
+        &dec_out.z,
+        &dec_out.pi_z,
+    )
+    .expect("judge should run");
+
     assert!(!judge_ok);
 }

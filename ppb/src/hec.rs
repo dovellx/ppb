@@ -2,9 +2,8 @@ use num_bigint::{BigUint, RandBigInt};
 use num_traits::{One, Zero};
 use rand::rngs::OsRng;
 
-use crate::cs::{dec_cs, enc_cs, keygen_cs, setup_cs, CsParams, CsPubKey, CsSecretKey};
+use crate::cs::{dec_cs, enc_cs, enc_cs_with_randomness, keygen_cs, setup_cs, CsParams, CsPubKey, CsSecretKey};
 use crate::error::{CryptoError, CryptoResult};
-use crate::math::abs_qr_rep;
 use crate::pok::{CamenischShoupCiphertext, CiphertextPolynomial, Scalar};
 
 /// HEC 全局参数。
@@ -46,11 +45,30 @@ pub struct HecAuditData {
     pub x: Vec<Scalar>,
 }
 
+/// HECenc 的证明见证。
+///
+/// 这不是公开输出的一部分，而是 PPB/PoKS1 生成证明时需要保留的内部数据。
+/// 论文里的 `HECenc(hecpar, f, x; r)` 把随机性 `r` 隐含在算法调用中；
+/// 当前工程要构造 PoKS1，因此必须把这些随机性显式保存下来。
+///
+/// 字段语义：
+/// 1. `mask`: 论文 Fig. D.3 里的随机掩码 `s`；
+/// 2. `masked_coeffs`: `P = s * prod(chi - x_i)` 展开后的系数 `P_i`，
+///    也是公开密文 `A_i` 的明文；
+/// 3. `encryption_randomness`: 每个 `A_i = Enc(pkAH, P_i; rho_i)` 的 `rho_i`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HecEncWitness {
+    pub mask: Scalar,
+    pub masked_coeffs: Vec<Scalar>,
+    pub encryption_randomness: Vec<Scalar>,
+}
+
 /// HECenc 总输出：(X, d)。
 #[derive(Debug, Clone)]
 pub struct HecEncOutput {
     pub x_public: HecPublicPackage,
     pub d_audit: HecAuditData,
+    pub enc_witness: HecEncWitness,
 }
 
 /// HECeval 的用户输入 y = (y_id, y_at)。
@@ -105,39 +123,6 @@ fn sample_nonzero_scalar_mod_n(n: &BigUint) -> CryptoResult<BigUint> {
             return Ok(s);
         }
     }
-}
-
-/// 使用指定随机数执行 CS 加密：Enc(pk, m; r)。
-///
-/// 说明：
-/// 1. 标准 `enc_cs` 会内部随机采样 r；
-/// 2. HECeval 需要显式使用输入随机数 `(rid, rat)`，因此单独实现此 helper；
-/// 3. 为保持与全库一致，结果仍映射到 |QR_{n^2}| 代表元。
-fn enc_cs_with_randomness(
-    params: &CsParams,
-    pk: &CsPubKey,
-    m: &BigUint,
-    r: &BigUint,
-) -> CryptoResult<CamenischShoupCiphertext> {
-    if m >= &params.n {
-        return Err(CryptoError::InvalidInput("message must be in [0, n)"));
-    }
-    if params.n2.is_zero() {
-        return Err(CryptoError::InvalidInput("n^2 must be non-zero"));
-    }
-
-    // 工程实现里把外部输入随机数映射到 Z_n，保证同态公式在明文模 n 上闭合。
-    let r_mod = r % &params.n;
-
-    let c0_raw = params.g.modpow(&r_mod, &params.n2);
-    let c0 = abs_qr_rep(&c0_raw, &params.n2);
-
-    let kr = pk.k.modpow(&r_mod, &params.n2);
-    let hm = params.h.modpow(m, &params.n2);
-    let c1_raw = (kr * hm) % &params.n2;
-    let c1 = abs_qr_rep(&c1_raw, &params.n2);
-
-    Ok(CamenischShoupCiphertext { c0, c1 })
 }
 
 /// CS 密文同态加法：Enc(a) ⊕ Enc(b) = Enc(a+b)。
@@ -220,27 +205,50 @@ pub fn expand_roots_to_coefficients_mod_n(x: &[Scalar], s: &Scalar, n: &BigUint)
 /// 4. 逐系数加密 `A_i <- Enc(pk_AH, P_i)`；
 /// 5. 返回公开包 `X` 与审计上下文 `d`。
 pub fn hec_enc(hecpar: &HecParams, fk: &HecFunctionKey, x: &[Scalar]) -> CryptoResult<HecEncOutput> {
+    let mask = sample_nonzero_scalar_mod_n(&hecpar.cs_params.n)?;
+    hec_enc_with_mask(hecpar, fk, x, &mask)
+}
+
+/// 使用外部指定掩码执行 HECenc。
+///
+/// PPB 的 KeyGen 接口已经带有 `s` 参数。为了让 PoKS1 可以证明
+/// `X = HECenc(...; r)`，KeyGen 必须让公开输出 `X` 与它随后证明的
+/// witness 使用同一份掩码；因此这里提供显式掩码版本。
+pub fn hec_enc_with_mask(
+    hecpar: &HecParams,
+    fk: &HecFunctionKey,
+    x: &[Scalar],
+    mask: &Scalar,
+) -> CryptoResult<HecEncOutput> {
     if x.is_empty() {
         return Err(CryptoError::InvalidInput("x must be non-empty"));
     }
     if fk.n != x.len() {
         return Err(CryptoError::InvalidInput("fk.n must equal x.len()"));
     }
+    if (mask % &hecpar.cs_params.n).is_zero() {
+        return Err(CryptoError::InvalidInput("HEC mask must be non-zero in Z_n"));
+    }
 
     // Step 1: 生成 AH 密钥对。
     let (pk_ah, sk_e) = keygen_cs(&hecpar.cs_params)?;
 
-    // Step 2: 采样随机掩码 s。
-    let s = sample_nonzero_scalar_mod_n(&hecpar.cs_params.n)?;
-
-    // Step 3: 在 Z_n 下展开名单多项式系数。
-    let coeffs = expand_roots_to_coefficients_mod_n(x, &s, &hecpar.cs_params.n)?;
+    // Step 2~3: 在 Z_n 下展开名单多项式系数，并乘以调用方指定的掩码。
+    let coeffs = expand_roots_to_coefficients_mod_n(x, mask, &hecpar.cs_params.n)?;
 
     // Step 4: 加密每个系数（包括 0 系数，也必须走正式加密流程）。
+    //
+    // 标准 `enc_cs` 不返回随机数；PoKS1 需要证明 `A_i` 的加密正确性，
+    // 因此这里改用显式随机数版本并把 `rho_i` 保存到 witness 中。
     let mut encrypted_coeffs = Vec::with_capacity(coeffs.len());
+    let mut encryption_randomness = Vec::with_capacity(coeffs.len());
     for coeff in &coeffs {
-        let enc = enc_cs(&hecpar.cs_params, &pk_ah, coeff)?;
+        // 真实 HECenc 系数密文使用非零随机数。零随机数虽然满足同态等式，
+        // 但会退化为确定性加密，不能作为隐私保护输出。
+        let rho = sample_nonzero_scalar_mod_n(&hecpar.cs_params.n)?;
+        let enc = enc_cs_with_randomness(&hecpar.cs_params, &pk_ah, coeff, &rho)?;
         encrypted_coeffs.push(enc);
+        encryption_randomness.push(rho);
     }
 
     let polynomial = CiphertextPolynomial::new(encrypted_coeffs.clone(), &hecpar.cs_params.n2)?;
@@ -255,6 +263,11 @@ pub fn hec_enc(hecpar: &HecParams, fk: &HecFunctionKey, x: &[Scalar]) -> CryptoR
             sk_e,
             fk: fk.clone(),
             x: x.to_vec(),
+        },
+        enc_witness: HecEncWitness {
+            mask: mask.clone() % &hecpar.cs_params.n,
+            masked_coeffs: coeffs,
+            encryption_randomness,
         },
     })
 }

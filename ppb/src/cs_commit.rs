@@ -7,7 +7,7 @@ use crate::cs::CsCiphertext;
 use crate::df::DfParams;
 use crate::error::{CryptoError, CryptoResult};
 use crate::hash::fiat_shamir_challenge_biguints;
-use crate::math::{derive_b_bits_from_n2, modinv, sample_abs_qr_element};
+use crate::math::{derive_b_bits_from_n2, gcd, modinv, sample_abs_qr_element};
 
 /// 针对 CS 密文承诺层的公共参数。
 ///
@@ -599,7 +599,9 @@ pub fn prove_cs_add(
     }
 
     // ell = B + 2lambda。
-    let ell = derive_blinding_bits(params, 0)?;
+    // 盲化必须覆盖 256 位 Fiat-Shamir 挑战 e：否则 z = k - e·γ 的高位直接泄露 γ，
+    // 击穿零知识/统计隐藏。取 B + 2λ + 256（与 mult/enc 一致）。
+    let ell = derive_blinding_bits(params, 256)?;
 
     // 1) 盲化阶段：在对称区间采样 k_i，并计算 R_i。
     let mut rng = OsRng;
@@ -721,7 +723,9 @@ pub fn prove_cs_com(
         return Err(CryptoError::InvalidInput("opening does not satisfy C4 equation"));
     }
 
-    let blind_bits = derive_blinding_bits(params, 0)?;
+    // 盲化必须覆盖 256 位 Fiat-Shamir 挑战 e：否则 z = k + e·w 的高位直接泄露开口 w，
+    // 击穿零知识/统计隐藏。取 B + 2λ + 256（与 mult/enc 一致）。
+    let blind_bits = derive_blinding_bits(params, 256)?;
     let blind_bits_u64 =
         u64::try_from(blind_bits).map_err(|_| CryptoError::InvalidInput("B+2lambda too large"))?;
 
@@ -796,6 +800,228 @@ pub fn verify_cs_com(
     let rhs_2 = (proof.r4.modpow(&two, &params.n2) * commitment.c4.modpow(&two_e, &params.n2)) % &params.n2;
 
     Ok(lhs_1 == rhs_1 && lhs_2 == rhs_2)
+}
+
+/// `Prove^Com` 的“对公开密文开口”变体的证明对象。
+///
+/// 背景与动机：
+/// - `CsComProof`（上面的 `prove_cs_com`）只证明“知道某个开口”，也就是只验证
+///   承诺的第二分量 C2/C4 是良构的 DF 承诺，从而让抽取器可以还原 (s1,r1,s2,r2)。
+///   它【不】把承诺绑定到任何具体的公开明文。
+/// - 但论文 Alg.2 的递归【基例】要求的是更强的语句：
+///     π1 = NIZK[r : Com_AH(⌊x0⌋, r) = CP]
+///   即“CP 承诺的正是那个【公开的、折叠后的输入密文】x0”。
+///   缺了这一层锚定，简洁求值证明的可靠性会被击穿（prover 可令 E 为任意密文）。
+///
+/// 因此这里补一个专门的证明系统：给定【公开】密文 x0=(u,v)，证明
+///     C1 = ±u·g^{s1},  C2 = ±(g')^{s1}(h')^{r1},
+///     C3 = ±v·g^{s2},  C4 = ±(g')^{s2}(h')^{r2}
+/// 其中 ± 是隐藏的符号位 (a1,b1,a2,b2)∈{-1,+1}。
+///
+/// 证明结构（Fiat-Shamir 化的 eqrep-Z_{n^2}，用“平方”消符号）：
+/// - R1=g^{k_s1}, R2=(g')^{k_s1}(h')^{k_r1}, R3=g^{k_s2}, R4=(g')^{k_s2}(h')^{k_r2}
+/// - e = Hash(statement, R1..R4)
+/// - z_s1=k_s1+e·s1, z_r1=k_r1+e·r1, z_s2=k_s2+e·s2, z_r2=k_r2+e·r2
+///
+/// 关键点：R1/R3 用基 g，把值分量指数 s1/s2 与 C2/C4 里出现的【同一个】 s1/s2
+/// 绑在一起，这正是缺失的锚定；u,v 作为公开常数进入验证式（不进入见证）。
+#[derive(Debug, Clone)]
+pub struct CsComCtProof {
+    /// R1 = g^{k_s1}（值分量 C1 的盲化承诺，基为 g）。
+    pub r1: BigUint,
+    /// R2 = (g')^{k_s1}(h')^{k_r1}（随机分量 C2 的盲化承诺）。
+    pub r2: BigUint,
+    /// R3 = g^{k_s2}（值分量 C3 的盲化承诺，基为 g）。
+    pub r3: BigUint,
+    /// R4 = (g')^{k_s2}(h')^{k_r2}（随机分量 C4 的盲化承诺）。
+    pub r4: BigUint,
+    /// z_s1 = k_s1 + e·s1（整数域，不取模）。
+    pub z_s1: BigUint,
+    /// z_r1 = k_r1 + e·r1。
+    pub z_r1: BigUint,
+    /// z_s2 = k_s2 + e·s2。
+    pub z_s2: BigUint,
+    /// z_r2 = k_r2 + e·r2。
+    pub z_r2: BigUint,
+}
+
+/// 计算“对公开密文开口”证明的 Fiat-Shamir 挑战：
+/// e <- Hash(n, g, g', h', C1, C2, C3, C4, u, v, R1, R2, R3, R4)
+///
+/// 注意：挑战必须同时绑定【完整承诺 C=(C1..C4)】与【公开密文 (u,v)】，
+/// 否则同一份证明可被搬到另一条 (C, x0) 语句上复用（可转移性 → 可靠性隐患）。
+fn fs_challenge_for_cs_com_ct(
+    params: &CsCommitParams,
+    commitment: &CsCommitment,
+    u: &BigUint,
+    v: &BigUint,
+    r1: &BigUint,
+    r2: &BigUint,
+    r3: &BigUint,
+    r4: &BigUint,
+) -> BigUint {
+    fs_challenge_from_biguints(&[
+        &params.n,
+        &params.g,
+        &params.g_prime,
+        &params.h_prime,
+        &commitment.c1,
+        &commitment.c2,
+        &commitment.c3,
+        &commitment.c4,
+        u,
+        v,
+        r1,
+        r2,
+        r3,
+        r4,
+    ])
+}
+
+/// 证明承诺 `commitment` 打开到【公开】密文 `x0`（论文 Alg.2 基例 π1）。
+///
+/// 参数：
+/// - `commitment`：待证承诺 C=(C1,C2,C3,C4)；
+/// - `x0`：公开的目标密文 (u,v)；
+/// - `opening`：C 对 x0 的真实开口 O=(a1,a2,s1,s2,r1,r2,b1,b2)。
+///
+/// 该函数会先自检见证与承诺一致，避免对错误实例产出“格式合法”的证明。
+pub fn prove_cs_com_ciphertext(
+    params: &CsCommitParams,
+    commitment: &CsCommitment,
+    x0: &CsCiphertext,
+    opening: &CsCommitOpening,
+) -> CryptoResult<CsComCtProof> {
+    // 符号位必须在 {-1,+1}，否则平方消符号的语义不成立。
+    if !is_pm_one(opening.a1)
+        || !is_pm_one(opening.b1)
+        || !is_pm_one(opening.a2)
+        || !is_pm_one(opening.b2)
+    {
+        return Err(CryptoError::InvalidInput("signs must be in {-1,+1}"));
+    }
+
+    let n2 = &params.n2;
+    // 公开密文分量统一规约到 [0, n^2)。
+    let u = &x0.c0 % n2;
+    let v = &x0.c1 % n2;
+
+    // ---- 见证一致性自检：四条主等式都必须成立 ----
+    // C1 = a1 · u · g^{s1}
+    let c1_expected = apply_sign_mod_n2(&((&u * params.g.modpow(&opening.s1, n2)) % n2), opening.a1, n2)?;
+    // C2 = b1 · (g')^{s1} · (h')^{r1}
+    let c2_expected = apply_sign_mod_n2(
+        &((params.g_prime.modpow(&opening.s1, n2) * params.h_prime.modpow(&opening.r1, n2)) % n2),
+        opening.b1,
+        n2,
+    )?;
+    // C3 = a2 · v · g^{s2}
+    let c3_expected = apply_sign_mod_n2(&((&v * params.g.modpow(&opening.s2, n2)) % n2), opening.a2, n2)?;
+    // C4 = b2 · (g')^{s2} · (h')^{r2}
+    let c4_expected = apply_sign_mod_n2(
+        &((params.g_prime.modpow(&opening.s2, n2) * params.h_prime.modpow(&opening.r2, n2)) % n2),
+        opening.b2,
+        n2,
+    )?;
+    if c1_expected != commitment.c1
+        || c2_expected != commitment.c2
+        || c3_expected != commitment.c3
+        || c4_expected != commitment.c4
+    {
+        return Err(CryptoError::InvalidInput("opening does not open C to x0"));
+    }
+
+    // ---- Commit 阶段 ----
+    // 盲化位长取 B + 2λ + 256：其中 256 覆盖 Fiat-Shamir 挑战 e 的位长，
+    // 2λ 提供统计隐藏余量，从而保证 z = k + e·w 不泄露见证 w（s1,r1,s2,r2）。
+    let blind_bits = derive_blinding_bits(params, 256)?;
+    let blind_bits_u64 =
+        u64::try_from(blind_bits).map_err(|_| CryptoError::InvalidInput("blind bits too large"))?;
+    let mut rng = OsRng;
+    let k_s1 = rng.gen_biguint(blind_bits_u64);
+    let k_r1 = rng.gen_biguint(blind_bits_u64);
+    let k_s2 = rng.gen_biguint(blind_bits_u64);
+    let k_r2 = rng.gen_biguint(blind_bits_u64);
+
+    // R1/R3 用基 g（对应值分量 C1/C3 的指数 s1/s2）；
+    // R2/R4 用基 (g',h')（对应随机分量 C2/C4）。
+    let r1 = params.g.modpow(&k_s1, n2);
+    let r2 = (params.g_prime.modpow(&k_s1, n2) * params.h_prime.modpow(&k_r1, n2)) % n2;
+    let r3 = params.g.modpow(&k_s2, n2);
+    let r4 = (params.g_prime.modpow(&k_s2, n2) * params.h_prime.modpow(&k_r2, n2)) % n2;
+
+    // ---- Challenge 阶段 ----
+    let e = fs_challenge_for_cs_com_ct(params, commitment, &u, &v, &r1, &r2, &r3, &r4);
+
+    // ---- Response 阶段（整数域线性组合，不取模）----
+    Ok(CsComCtProof {
+        r1,
+        r2,
+        r3,
+        r4,
+        z_s1: &k_s1 + &e * &opening.s1,
+        z_r1: &k_r1 + &e * &opening.r1,
+        z_s2: &k_s2 + &e * &opening.s2,
+        z_r2: &k_r2 + &e * &opening.r2,
+    })
+}
+
+/// 验证承诺 `commitment` 打开到【公开】密文 `x0`。
+///
+/// 验证式（全部两边平方以消去隐藏符号 a1,b1,a2,b2）：
+/// 令 A1 = C1^2 · (u^2)^{-1} = g^{2 s1}，A3 = C3^2 · (v^2)^{-1} = g^{2 s2}，则
+///   (1) g^{2 z_s1}                      ?= R1^2 · A1^e
+///   (2) (g')^{2 z_s1} (h')^{2 z_r1}     ?= R2^2 · C2^{2e}
+///   (3) g^{2 z_s2}                      ?= R3^2 · A3^e
+///   (4) (g')^{2 z_s2} (h')^{2 z_r2}     ?= R4^2 · C4^{2e}
+///
+/// 等式 (1)/(3) 把值分量（除掉公开 u,v 后剩下的 g^{2 s}）与 (2)/(4) 里的【同一
+/// 个】 s1/s2 绑定，这正是“承诺确实打开到 x0”的锚定。
+pub fn verify_cs_com_ciphertext(
+    params: &CsCommitParams,
+    commitment: &CsCommitment,
+    x0: &CsCiphertext,
+    proof: &CsComCtProof,
+) -> CryptoResult<bool> {
+    let n2 = &params.n2;
+    if n2.is_zero() {
+        return Err(CryptoError::InvalidInput("n^2 must be non-zero"));
+    }
+
+    let u = &x0.c0 % n2;
+    let v = &x0.c1 % n2;
+    // u,v 必须是 Z*_{n^2} 单位元，否则 u^2/v^2 不可逆（诚实密文分量落在 |QR_{n^2}|，
+    // 必然与 n^2 互素；这里对畸形输入直接判否，而不是抛错）。
+    if gcd(u.clone(), n2.clone()) != BigUint::one() || gcd(v.clone(), n2.clone()) != BigUint::one() {
+        return Ok(false);
+    }
+
+    let two = BigUint::from(2u32);
+    let e = fs_challenge_for_cs_com_ct(params, commitment, &u, &v, &proof.r1, &proof.r2, &proof.r3, &proof.r4);
+    let two_e = &two * &e;
+
+    // A1 = C1^2 / u^2 = g^{2 s1}; A3 = C3^2 / v^2 = g^{2 s2}
+    let a1 = (commitment.c1.modpow(&two, n2) * modinv(&u.modpow(&two, n2), n2)?) % n2;
+    let a3 = (commitment.c3.modpow(&two, n2) * modinv(&v.modpow(&two, n2), n2)?) % n2;
+
+    // (1) g^{2 z_s1} ?= R1^2 · A1^e
+    let ok1 = params.g.modpow(&(&two * &proof.z_s1), n2)
+        == (proof.r1.modpow(&two, n2) * a1.modpow(&e, n2)) % n2;
+    // (2) (g')^{2 z_s1} (h')^{2 z_r1} ?= R2^2 · C2^{2e}
+    let ok2 = (params.g_prime.modpow(&(&two * &proof.z_s1), n2)
+        * params.h_prime.modpow(&(&two * &proof.z_r1), n2))
+        % n2
+        == (proof.r2.modpow(&two, n2) * commitment.c2.modpow(&two_e, n2)) % n2;
+    // (3) g^{2 z_s2} ?= R3^2 · A3^e
+    let ok3 = params.g.modpow(&(&two * &proof.z_s2), n2)
+        == (proof.r3.modpow(&two, n2) * a3.modpow(&e, n2)) % n2;
+    // (4) (g')^{2 z_s2} (h')^{2 z_r2} ?= R4^2 · C4^{2e}
+    let ok4 = (params.g_prime.modpow(&(&two * &proof.z_s2), n2)
+        * params.h_prime.modpow(&(&two * &proof.z_r2), n2))
+        % n2
+        == (proof.r4.modpow(&two, n2) * commitment.c4.modpow(&two_e, n2)) % n2;
+
+    Ok(ok1 && ok2 && ok3 && ok4)
 }
 
 /// ProveMultCS(params, Ca, Cb, Cy, [Oa, Ob, y, r_y, b_y, {b_i}]) -> pi
@@ -1378,6 +1604,43 @@ mod tests {
 
         let ok = verify_cs_com(&params, &committed.commitment, &proof).expect("verify should run");
         assert!(ok);
+    }
+
+    /// 修复1回归测试：`prove/verify_cs_com_ciphertext` 是“对公开密文开口”的证明。
+    /// 正例：对真实承诺的目标密文 x0 验证通过。
+    /// 反例（关键）：把公开目标换成另一条密文 x0'，验证必须失败——这正是
+    /// 简洁求值证明基例所需的“锚定到公开折叠值”能力（缺了它可靠性被击穿）。
+    #[test]
+    fn test_verify_cs_com_ciphertext_accepts_and_rejects_wrong_public_value() {
+        let cs_params = setup_cs(64).expect("setup cs should succeed");
+        let df_params = DfParams {
+            n: cs_params.n.clone(),
+            n2: cs_params.n2.clone(),
+            g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
+            h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
+        };
+        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+
+        let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
+
+        // x0：被承诺的真实密文。
+        let x0 = enc_cs(&cs_params, &pk, &BigUint::from(11u32)).expect("enc x0 should succeed");
+        let committed = commit_cs(&params, &x0, 96).expect("commit cs should succeed");
+
+        let proof = prove_cs_com_ciphertext(&params, &committed.commitment, &x0, &committed.opening)
+            .expect("prove cs com ciphertext should succeed");
+
+        // 正例：对 x0 验证通过。
+        let ok = verify_cs_com_ciphertext(&params, &committed.commitment, &x0, &proof)
+            .expect("verify should run");
+        assert!(ok);
+
+        // 反例：换成另一条公开密文 x0'（消息不同），验证必须拒绝。
+        let x0_prime = enc_cs(&cs_params, &pk, &BigUint::from(12u32)).expect("enc x0' should succeed");
+        assert_ne!(x0.c0, x0_prime.c0);
+        let rejected = verify_cs_com_ciphertext(&params, &committed.commitment, &x0_prime, &proof)
+            .expect("verify should run");
+        assert!(!rejected);
     }
 
     #[test]

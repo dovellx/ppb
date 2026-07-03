@@ -15,12 +15,15 @@ pub use cs_commit::{
 	commit_cs,
 	prove_cs_add,
 	prove_cs_com,
+	prove_cs_com_ciphertext,
 	prove_cs_enc,
 	prove_cs_mult,
 	verify_cs_add,
 	verify_cs_com,
+	verify_cs_com_ciphertext,
 	verify_cs_enc,
 	CsAddProof,
+	CsComCtProof,
 	CsEncProof,
 	setup_cs_commit,
 	CsComProof,
@@ -53,6 +56,7 @@ pub use hec::{
 pub use hash::{fiat_shamir_challenge, fiat_shamir_challenge_biguints};
 pub use pok::{
 	CamenischShoupCiphertext,
+	DfOpenProof,
 	CiphertextPolynomial,
 	PoKAuxEntry,
 	PoKPProof,
@@ -60,9 +64,10 @@ pub use pok::{
 	PoKTranscript,
 	ProveMultProof,
 	Scalar,
-	pok_star_p,
 	pokp,
+	prove_df_open_public_scalar,
 	prove_mult,
+	verify_df_open_public_scalar,
 	verify_mult,
 };
 pub use pedersen_commitment::{

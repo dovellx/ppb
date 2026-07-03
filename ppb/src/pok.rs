@@ -4,8 +4,9 @@ use rand::rngs::OsRng;
 
 use crate::cs::CsCiphertext;
 use crate::cs_commit::{
-    commit_cs, prove_cs_add, prove_cs_com, prove_cs_mult, CsAddProof, CsComProof, CsCommitOpening,
-    CsCommitParams, CsCommitment, CsCommitmentWithOpening, CsMultProof,
+    commit_cs, prove_cs_add, prove_cs_com, prove_cs_com_ciphertext, prove_cs_mult, CsAddProof,
+    CsComCtProof, CsComProof, CsCommitOpening, CsCommitParams, CsCommitment,
+    CsCommitmentWithOpening, CsMultProof,
 };
 use crate::df::{commit_df, DfParams};
 use crate::error::{CryptoError, CryptoResult};
@@ -166,14 +167,20 @@ impl CiphertextPolynomial {
 /// 字段说明：
 /// 1. round: 当前轮次 i（从 1 开始）
 /// 2. cy_2i: 对 y^(2^i) 的 DF 承诺值
-/// 3. r_i: 该 DF 承诺对应开口随机数
-/// 4. pi_y2i: 连接前一轮与当前轮的平方关系 NIZK 证明
+/// 3. pi_y2i: 连接前一轮与当前轮的平方关系 NIZK 证明
 #[derive(Debug, Clone)]
 pub struct PoKAuxEntry {
     pub round: usize,
     pub cy_2i: BigUint,
-    pub r_i: BigUint,
     pub pi_y2i: ProveMultProof,
+}
+
+/// prover 内部保存的 aux 开口；不会进入公开证明对象。
+#[derive(Debug, Clone)]
+struct PoKAuxOpeningEntry {
+    round: usize,
+    cy_2i: BigUint,
+    r_i: BigUint,
 }
 
 /// 算法中的公共 transcript: tau = (Cy, c0, ..., c_{n-1}, cP)
@@ -182,6 +189,7 @@ pub struct PoKTranscript {
     pub cy: BigUint,
     pub c_values: Vec<CsCiphertext>,
     pub c_p: CsCiphertext,
+    pub history: Vec<BigUint>,
 }
 
 /// ProveMult 的标准证明对象。
@@ -195,6 +203,15 @@ pub struct ProveMultProof {
     pub z_z: BigInt,
     pub z_rin: BigInt,
     pub z_gamma: BigInt,
+}
+
+/// DF 承诺对公开消息的开口证明。
+///
+/// 用于绑定 `Cy_alpha` 确实承诺 Fiat-Shamir 得到的公开 alpha，而不是另一个标量。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DfOpenProof {
+    pub r_commitment: BigUint,
+    pub z_r: BigUint,
 }
 
 /// 一层递归证明节点的公共输出。
@@ -211,6 +228,7 @@ pub struct PoKStarRoundProof {
     pub alpha: BigUint,
     pub cy_half: BigUint,
     pub cy_alpha: BigUint,
+    pub pi_cy_alpha: DfOpenProof,
     pub pi_c1: CsComProof,
     pub pi_c2: CsComProof,
     pub pi_c3: CsComProof,
@@ -228,7 +246,13 @@ pub struct PoKStarRoundProof {
 /// - `Recursive`: 记录当前轮证明并携带下一轮子证明。
 #[derive(Debug, Clone)]
 pub enum PoKStarProof {
-    Base { pi_open_cp: CsComProof },
+    /// 递归基例（n=1）：对应论文 Alg.2 line 1 的
+    ///   π1 = NIZK[r : Com_AH(⌊x0⌋, r) = CP]。
+    ///
+    /// 这里必须用 `CsComCtProof`（“对公开密文 x0 开口”），而不是旧的
+    /// `CsComProof`（只证“知道某个开口”）。后者不把 CP 绑定到那个公开的、
+    /// 折叠后的输入密文 x0，会让简洁求值证明的可靠性被击穿。
+    Base { pi_open_cp: CsComCtProof },
     Recursive {
         round: PoKStarRoundProof,
         next: Box<PoKStarProof>,
@@ -334,7 +358,12 @@ fn pow_scalar_usize(base: &Scalar, mut exp: usize) -> Scalar {
 /// 映射规则：
 /// - power = 1 时，直接使用 (Cy, r_y)；
 /// - power = 2^i (i>=1) 时，来自 `aux` 中 round=i 的条目。
-fn lookup_cy_for_power(power: usize, cy: &BigUint, r_y: &BigUint, aux: &[PoKAuxEntry]) -> CryptoResult<(BigUint, BigUint)> {
+fn lookup_cy_for_power(
+    power: usize,
+    cy: &BigUint,
+    r_y: &BigUint,
+    aux_openings: &[PoKAuxOpeningEntry],
+) -> CryptoResult<(BigUint, BigUint)> {
     if power == 1 {
         return Ok((cy.clone(), r_y.clone()));
     }
@@ -347,11 +376,91 @@ fn lookup_cy_for_power(power: usize, cy: &BigUint, r_y: &BigUint, aux: &[PoKAuxE
         return Ok((cy.clone(), r_y.clone()));
     }
 
-    let entry = aux
+    let entry = aux_openings
         .iter()
         .find(|e| e.round == round)
         .ok_or(CryptoError::InvalidInput("aux does not contain required y^(2^i) commitment"))?;
     Ok((entry.cy_2i.clone(), entry.r_i.clone()))
+}
+
+fn append_commitment_fields(fields: &mut Vec<BigUint>, commitment: &CsCommitment) {
+    fields.push(commitment.c1.clone());
+    fields.push(commitment.c2.clone());
+    fields.push(commitment.c3.clone());
+    fields.push(commitment.c4.clone());
+}
+
+fn append_cs_com_proof_fields(fields: &mut Vec<BigUint>, proof: &CsComProof) {
+    fields.push(proof.r2.clone());
+    fields.push(proof.r4.clone());
+    fields.push(proof.z_s1.clone());
+    fields.push(proof.z_r1.clone());
+    fields.push(proof.z_s2.clone());
+    fields.push(proof.z_r2.clone());
+}
+
+fn append_cs_add_proof_fields(fields: &mut Vec<BigUint>, proof: &CsAddProof) {
+    fields.push(proof.e.clone());
+    fields.push(bigint_to_transcript_uint(&proof.z1));
+    fields.push(bigint_to_transcript_uint(&proof.z2));
+    fields.push(bigint_to_transcript_uint(&proof.z3));
+    fields.push(bigint_to_transcript_uint(&proof.z4));
+}
+
+fn append_cs_mult_proof_fields(fields: &mut Vec<BigUint>, proof: &CsMultProof) {
+    fields.push(proof.r_y.clone());
+    fields.push(proof.r1.clone());
+    fields.push(proof.r2.clone());
+    fields.push(proof.r3.clone());
+    fields.push(proof.r4.clone());
+    fields.push(bigint_to_transcript_uint(&proof.z_y));
+    fields.push(bigint_to_transcript_uint(&proof.z_ry));
+    fields.push(bigint_to_transcript_uint(&proof.z1));
+    fields.push(bigint_to_transcript_uint(&proof.z2));
+    fields.push(bigint_to_transcript_uint(&proof.z3));
+    fields.push(bigint_to_transcript_uint(&proof.z4));
+}
+
+fn bigint_to_transcript_uint(value: &BigInt) -> BigUint {
+    if value >= &BigInt::zero() {
+        let mut out = value.to_biguint().unwrap_or_else(BigUint::zero);
+        out <<= 1usize;
+        out += BigUint::one();
+        return out;
+    }
+
+    let abs = (-value).to_biguint().unwrap_or_else(BigUint::zero);
+    abs << 1usize
+}
+
+fn append_round_to_tau(tau: &PoKTranscript, round: &PoKStarRoundProof) -> PoKTranscript {
+    let mut history = tau.history.clone();
+    append_commitment_fields(&mut history, &round.c1);
+    append_commitment_fields(&mut history, &round.c2);
+    append_commitment_fields(&mut history, &round.c3);
+    append_commitment_fields(&mut history, &round.c_alpha_e3);
+    append_commitment_fields(&mut history, &round.c_p_prime);
+    history.push(round.alpha.clone());
+    history.push(round.cy_half.clone());
+    history.push(round.cy_alpha.clone());
+    history.push(round.pi_cy_alpha.r_commitment.clone());
+    history.push(round.pi_cy_alpha.z_r.clone());
+    append_cs_com_proof_fields(&mut history, &round.pi_c1);
+    append_cs_com_proof_fields(&mut history, &round.pi_c2);
+    append_cs_com_proof_fields(&mut history, &round.pi_c3);
+    append_cs_com_proof_fields(&mut history, &round.pi_c_alpha_e3);
+    append_cs_com_proof_fields(&mut history, &round.pi_c_p_prime);
+    append_cs_add_proof_fields(&mut history, &round.pi_e_eq_e1_plus_e2);
+    append_cs_mult_proof_fields(&mut history, &round.pi_e2_eq_y_half_mul_e3);
+    append_cs_mult_proof_fields(&mut history, &round.pi_alpha_mul_e3);
+    append_cs_add_proof_fields(&mut history, &round.pi_eprime_eq_e1_plus_alphae3);
+
+    PoKTranscript {
+        cy: tau.cy.clone(),
+        c_values: tau.c_values.clone(),
+        c_p: tau.c_p.clone(),
+        history,
+    }
 }
 
 /// 计算输出/输入开口符号的“商”向量（在 {-1,+1} 上与乘法等价）。
@@ -412,9 +521,26 @@ fn fs_alpha_for_pok_star(c1: &CsCommitment, c2: &CsCommitment, c3: &CsCommitment
     }
     fields.push(tau.c_p.c0.clone());
     fields.push(tau.c_p.c1.clone());
+    fields.extend(tau.history.iter().cloned());
 
     let refs: Vec<&BigUint> = fields.iter().collect();
     fiat_shamir_challenge_biguints(&refs)
+}
+
+fn fs_challenge_for_df_open_public_scalar(
+    params_df: &DfParams,
+    commitment: &BigUint,
+    message: &BigUint,
+    r_commitment: &BigUint,
+) -> BigUint {
+    fiat_shamir_challenge_biguints(&[
+        &params_df.n,
+        &params_df.g,
+        &params_df.h,
+        commitment,
+        message,
+        r_commitment,
+    ])
 }
 
 /// 计算平方关系证明的 Fiat-Shamir 挑战：
@@ -598,6 +724,65 @@ pub fn verify_mult(
     Ok(lhs_1 == rhs_1 && lhs_2 == rhs_2)
 }
 
+/// 证明 DF 承诺 `commitment = g^message h^r` 打开到公开消息 `message`。
+pub fn prove_df_open_public_scalar(
+    params_df: &DfParams,
+    commitment: &BigUint,
+    message: &BigUint,
+    r: &BigUint,
+    lambda_bits: usize,
+) -> CryptoResult<DfOpenProof> {
+    if params_df.n2.is_zero() {
+        return Err(CryptoError::InvalidInput("n^2 must be non-zero"));
+    }
+    if lambda_bits == 0 {
+        return Err(CryptoError::InvalidInput("lambda_bits must be > 0"));
+    }
+
+    let expected = (params_df.g.modpow(message, &params_df.n2) * params_df.h.modpow(r, &params_df.n2)) % &params_df.n2;
+    if &expected != commitment {
+        return Err(CryptoError::InvalidInput("DF opening witness does not match commitment"));
+    }
+
+    let blind_bits = derive_b_bits_from_n2(&params_df.n2)?
+        .checked_add(
+            lambda_bits
+                .checked_mul(2)
+                .ok_or(CryptoError::InvalidInput("2*lambda overflow"))?,
+        )
+        .ok_or(CryptoError::InvalidInput("B+2lambda overflow"))?;
+    let blind_bits_u64 = u64::try_from(blind_bits).map_err(|_| CryptoError::InvalidInput("B+2lambda too large"))?;
+
+    let mut rng = OsRng;
+    let k_r = rng.gen_biguint(blind_bits_u64);
+    let r_commitment = params_df.h.modpow(&k_r, &params_df.n2);
+    let e = fs_challenge_for_df_open_public_scalar(params_df, commitment, message, &r_commitment);
+    let z_r = k_r + (&e * r);
+
+    Ok(DfOpenProof { r_commitment, z_r })
+}
+
+/// 验证 DF 承诺 `commitment` 打开到公开消息 `message`。
+pub fn verify_df_open_public_scalar(
+    params_df: &DfParams,
+    commitment: &BigUint,
+    message: &BigUint,
+    proof: &DfOpenProof,
+) -> CryptoResult<bool> {
+    if params_df.n2.is_zero() {
+        return Err(CryptoError::InvalidInput("n^2 must be non-zero"));
+    }
+
+    let g_m = params_df.g.modpow(message, &params_df.n2);
+    let g_m_inv = modinv(&g_m, &params_df.n2)?;
+    let h_r = (commitment * g_m_inv) % &params_df.n2;
+    let e = fs_challenge_for_df_open_public_scalar(params_df, commitment, message, &proof.r_commitment);
+    let lhs = params_df.h.modpow(&proof.z_r, &params_df.n2);
+    let rhs = (&proof.r_commitment * h_r.modpow(&e, &params_df.n2)) % &params_df.n2;
+
+    Ok(lhs == rhs)
+}
+
 /// 递归实现 Algorithm 2 的内部函数。
 ///
 /// 该函数只依赖 `CiphertextPolynomial` 的 `evaluate/split_in_half/fold` 三个方法
@@ -612,12 +797,17 @@ fn pok_star_recursive(
     cy: &BigUint,
     poly: &CiphertextPolynomial,
     c_p_commitment: &CsCommitment,
-    aux: &[PoKAuxEntry],
+    aux_openings: &[PoKAuxOpeningEntry],
     tau: &PoKTranscript,
 ) -> CryptoResult<PoKStarProof> {
-    // Base case: n=1，仅需证明 CP 的承诺开口正确。
+    // Base case: n=1。
+    //
+    // 论文要求这里证明的是“CP 打开到那个【公开】的折叠输入密文 x0”，
+    // 而不是“CP 存在某个开口”。此时 poly 只剩一个系数，且 c_p 恰好等于
+    // 该系数（单系数多项式的 Horner 求值就是它本身），因此 x0 = c_p。
+    // 用 prove_cs_com_ciphertext 把 CP 锚定到 c_p，堵住基例可靠性缺口。
     if poly.len() == 1 {
-        let pi_open_cp = prove_cs_com(params_ah, c_p_commitment, r_p)?;
+        let pi_open_cp = prove_cs_com_ciphertext(params_ah, c_p_commitment, c_p, r_p)?;
         return Ok(PoKStarProof::Base { pi_open_cp });
     }
 
@@ -695,7 +885,7 @@ fn pok_star_recursive(
     )?;
 
     // 9) 证明 e2 = y^(n/2) ⊙ e3（相对 Cy_{n/2}）。
-    let (cy_half, r_half) = lookup_cy_for_power(half, cy, r_y, aux)?;
+    let (cy_half, r_half) = lookup_cy_for_power(half, cy, r_y, aux_openings)?;
     let y_half_bi = bu_to_bi(&y_half)?;
     let r_half_bi = bu_to_bi(&r_half)?;
     let b_half = derive_mult_signs(&c2_with_open.opening, &c3_with_open.opening, &y_half_bi)?;
@@ -724,6 +914,13 @@ fn pok_star_recursive(
     // 11) 对 alpha 做 DF 承诺，随后证明 alpha ⊙ e3 关系。
     let df_rand_bits = default_df_randomness_bits(params_ah)?;
     let cy_alpha_with_open = commit_df(params_df_for_alpha, &alpha, df_rand_bits)?;
+    let pi_cy_alpha = prove_df_open_public_scalar(
+        params_df_for_alpha,
+        &cy_alpha_with_open.c,
+        &alpha,
+        &cy_alpha_with_open.r,
+        params_ah.lambda_bits,
+    )?;
     let alpha_bi = bu_to_bi(&alpha)?;
     let r_alpha_bi = bu_to_bi(&cy_alpha_with_open.r)?;
     let b_alpha = derive_mult_signs(&c_alpha_e3_with_open.opening, &c3_with_open.opening, &alpha_bi)?;
@@ -751,12 +948,29 @@ fn pok_star_recursive(
         &c_p_prime_with_open.opening,
     )?;
 
-    // 13) 更新递归 transcript（工程转写：切换到折叠后的多项式语句）。
-    let tau_next = PoKTranscript {
-        cy: tau.cy.clone(),
-        c_values: folded_poly.coeffs().to_vec(),
-        c_p: e_prime.clone(),
+    let round_proof = PoKStarRoundProof {
+        c1: c1_with_open.commitment,
+        c2: c2_with_open.commitment,
+        c3: c3_with_open.commitment,
+        c_alpha_e3: c_alpha_e3_with_open.commitment,
+        c_p_prime: c_p_prime_with_open.commitment.clone(),
+        alpha,
+        cy_half,
+        cy_alpha: cy_alpha_with_open.c,
+        pi_cy_alpha,
+        pi_c1,
+        pi_c2,
+        pi_c3,
+        pi_c_alpha_e3,
+        pi_c_p_prime,
+        pi_e_eq_e1_plus_e2,
+        pi_e2_eq_y_half_mul_e3,
+        pi_alpha_mul_e3,
+        pi_eprime_eq_e1_plus_alphae3,
     };
+
+    // 13) 更新递归 transcript：对应论文中的 tau' = (pi, tau)。
+    let tau_next = append_round_to_tau(tau, &round_proof);
 
     // 14) 进入下一层递归。
     let next = pok_star_recursive(
@@ -769,30 +983,12 @@ fn pok_star_recursive(
         cy,
         &folded_poly,
         &c_p_prime_with_open.commitment,
-        aux,
+        aux_openings,
         &tau_next,
     )?;
 
     Ok(PoKStarProof::Recursive {
-        round: PoKStarRoundProof {
-            c1: c1_with_open.commitment,
-            c2: c2_with_open.commitment,
-            c3: c3_with_open.commitment,
-            c_alpha_e3: c_alpha_e3_with_open.commitment,
-            c_p_prime: c_p_prime_with_open.commitment,
-            alpha,
-            cy_half,
-            cy_alpha: cy_alpha_with_open.c,
-            pi_c1,
-            pi_c2,
-            pi_c3,
-            pi_c_alpha_e3,
-            pi_c_p_prime,
-            pi_e_eq_e1_plus_e2,
-            pi_e2_eq_y_half_mul_e3,
-            pi_alpha_mul_e3,
-            pi_eprime_eq_e1_plus_alphae3,
-        },
+        round: round_proof,
         next: Box::new(next),
     })
 }
@@ -803,7 +999,7 @@ fn pok_star_recursive(
 /// 1. 构造密文多项式对象；
 /// 2. 调用递归核心；
 /// 3. 返回完整递归证明树。
-pub fn pok_star_p(
+fn pok_star_p(
     params_ah: &CsCommitParams,
     r_y: &BigUint,
     y: &BigUint,
@@ -812,7 +1008,7 @@ pub fn pok_star_p(
     cy: &BigUint,
     c_values: &[CsCiphertext],
     c_p_commitment: &CsCommitment,
-    aux: &[PoKAuxEntry],
+    aux_openings: &[PoKAuxOpeningEntry],
     tau: &PoKTranscript,
 ) -> CryptoResult<PoKStarProof> {
     if c_values.is_empty() {
@@ -837,7 +1033,7 @@ pub fn pok_star_p(
         cy,
         &poly,
         c_p_commitment,
-        aux,
+        aux_openings,
         tau,
     )
 }
@@ -885,6 +1081,7 @@ pub fn pokp(
     // Step 2: 构造 y^(2^i) 承诺序列，并生成每轮关系证明 pi_y2i。
     let rounds = c_values.len().ilog2() as usize;
     let mut aux = Vec::with_capacity(rounds);
+    let mut aux_openings = Vec::with_capacity(rounds);
 
     let mut prev_z = y.clone();
     let mut prev_cy = cy.clone();
@@ -909,8 +1106,12 @@ pub fn pokp(
         aux.push(PoKAuxEntry {
             round: i,
             cy_2i: cy2i.c.clone(),
-            r_i: cy2i.r.clone(),
             pi_y2i,
+        });
+        aux_openings.push(PoKAuxOpeningEntry {
+            round: i,
+            cy_2i: cy2i.c.clone(),
+            r_i: cy2i.r.clone(),
         });
 
         prev_z = z2;
@@ -923,6 +1124,7 @@ pub fn pokp(
         cy: cy.clone(),
         c_values: c_values.to_vec(),
         c_p: c_p.clone(),
+        history: Vec::new(),
     };
 
     // Step 4: 返回 aux, PoK*_P(...)
@@ -935,7 +1137,7 @@ pub fn pokp(
         cy,
         c_values,
         &c_p_wrapped.commitment,
-        &aux,
+        &aux_openings,
         &tau,
     )?;
 

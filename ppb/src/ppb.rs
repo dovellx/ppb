@@ -5,8 +5,8 @@ use rand::rngs::OsRng;
 use crate::cs::{enc_cs_with_randomness, keygen_cs, CsPubKey};
 use crate::cs_commit::{
     prove_cs_add, prove_cs_enc, prove_cs_mult, setup_cs_commit, verify_cs_add, verify_cs_com,
-    verify_cs_enc, verify_cs_mult, CsAddProof, CsCommitOpening, CsCommitParams, CsCommitment,
-    CsCommitmentWithOpening, CsEncProof, CsMultProof,
+    verify_cs_com_ciphertext, verify_cs_enc, verify_cs_mult, CsAddProof, CsCommitOpening,
+    CsCommitParams, CsCommitment, CsCommitmentWithOpening, CsComProof, CsEncProof, CsMultProof,
 };
 use crate::df::{commit_df, commit_df_with_opening, DfParams};
 use crate::error::{CryptoError, CryptoResult};
@@ -16,7 +16,10 @@ use crate::hec::{
     HecEvalRandomness, HecFunctionKey, HecParams, HecPublicPackage,
 };
 use crate::math::{abs_qr_rep, derive_b_bits_from_n2, gcd, modinv, sample_unit_mod_n2};
-use crate::pok::{verify_mult as verify_df_square_mult, CiphertextPolynomial, PoKAuxEntry, PoKPProof, PoKStarProof, PoKTranscript, pokp};
+use crate::pok::{
+    pokp, verify_df_open_public_scalar, verify_mult as verify_df_square_mult, CiphertextPolynomial,
+    PoKAuxEntry, PoKPProof, PoKStarProof, PoKTranscript,
+};
 
 /// PPB 全局参数 `Λ = (λ, cpar, hecpar, S1, S2, S3)` 的当前实现。
 ///
@@ -28,6 +31,17 @@ pub struct PpbParams {
     pub lambda_bits: usize,
     pub cpar: DfParams,
     pub hecpar: HecParams,
+    /// “天上的公钥” pk_sky（对应论文 Thm 9 / g*-BB-PSL 中 setup S2 生成的
+    /// 固定公钥）。
+    ///
+    /// 作用：Ψ2 证明要求 prover 把 y 用【这把固定公钥】g-半加密，安全归约里的
+    /// 直线抽取器以其对应私钥为陷门直线抽取 g(y)。
+    ///
+    /// 关键：pk_sky 必须由 setup 固定、脱离 prover 控制。若像旧实现那样让 prover
+    /// 每次自造并丢弃私钥，则无人持有陷门，直线可提取性（Blueprint-Hiding /
+    /// Privacy 归约所依赖）名存实亡。对应私钥 sk_sky 只是安全证明中的陷门，
+    /// 诚实各方无需使用，故在具体实现里 setup 生成后即丢弃即可。
+    pub sky_pk: CsPubKey,
 }
 
 /// PoKS1 折叠证明中的一轮 `(L_j, R_j)`。
@@ -230,10 +244,16 @@ pub fn setup_ppb<S1, S2, S3>(
         h: sample_unit_mod_n2(&mut rng, &hecpar.cs_params.n2),
     };
 
+    // 生成固定的“天上的公钥” pk_sky（论文 setup S2）。
+    // sk_sky 是安全归约里直线抽取器的陷门，诚实流程用不到，这里直接丢弃；
+    // 真实部署若需要可提取性归约成立，应由 setup 方在受控环境下保管 sk_sky。
+    let (sky_pk, _sky_sk) = keygen_cs(&hecpar.cs_params)?;
+
     Ok(PpbParams {
         lambda_bits,
         cpar,
         hecpar,
+        sky_pk,
     })
 }
 
@@ -1592,12 +1612,14 @@ fn build_poks2_proof(
     let c_r2 = commit_df(&params.cpar, &r2, df_randomness_bits)?;
     let c_r3 = commit_df(&params.cpar, &r3, df_randomness_bits)?;
 
-    // Step 3: 生成 `pk_sky`，加密 `m_y` 得 `C_sky`，并构造 `pi_sky`。
+    // Step 3: 用【setup 固定的】 pk_sky 加密 `m_y` 得 `C_sky`，并构造 `pi_sky`。
     //
     // 关键点：
-    // 1. 先做真实 CS 加密，再用 `com_ah_with_zero_randomness` 包装为 Ca；
-    // 2. `prove_cs_enc` 的 `Cy` 直接使用外部公共输入 `C_y`，把 sky 密文与用户承诺绑定。
-    let (pk_sky, _sk_sky) = keygen_cs(&params.hecpar.cs_params)?;
+    // 1. pk_sky 必须取自公共参数 `params.sky_pk`，【不能】由 prover 现场生成；
+    //    否则无人持有陷门私钥，直线可提取性失效（见 PpbParams.sky_pk 说明）。
+    // 2. 先做真实 CS 加密，再用 `com_ah_with_zero_randomness` 包装为 Ca；
+    // 3. `prove_cs_enc` 的 `Cy` 直接使用外部公共输入 `C_y`，把 sky 密文与用户承诺绑定。
+    let pk_sky = params.sky_pk.clone();
     let mut rng = OsRng;
     let r_sky = rng.gen_biguint_below(n);
     let c_sky = enc_cs_with_randomness(&params.hecpar.cs_params, &pk_sky, &m_y, &r_sky)?;
@@ -1961,26 +1983,105 @@ fn fs_alpha_for_pok_star_verify(c1: &CsCommitment, c2: &CsCommitment, c3: &CsCom
     }
     fields.push(tau.c_p.c0.clone());
     fields.push(tau.c_p.c1.clone());
+    fields.extend(tau.history.iter().cloned());
 
     let refs: Vec<&BigUint> = fields.iter().collect();
     fiat_shamir_challenge_biguints(&refs)
 }
 
-/// 递归验证 `PoK*_P` 证明树。
+fn bigint_to_transcript_uint_ppb(value: &BigInt) -> BigUint {
+    if value >= &BigInt::zero() {
+        let mut out = value.to_biguint().unwrap_or_else(BigUint::zero);
+        out <<= 1usize;
+        out += BigUint::one();
+        return out;
+    }
+
+    let abs = (-value).to_biguint().unwrap_or_else(BigUint::zero);
+    abs << 1usize
+}
+
+fn append_commitment_fields_for_pok_star(fields: &mut Vec<BigUint>, commitment: &CsCommitment) {
+    fields.push(commitment.c1.clone());
+    fields.push(commitment.c2.clone());
+    fields.push(commitment.c3.clone());
+    fields.push(commitment.c4.clone());
+}
+
+fn append_cs_com_proof_fields_for_pok_star(fields: &mut Vec<BigUint>, proof: &CsComProof) {
+    fields.push(proof.r2.clone());
+    fields.push(proof.r4.clone());
+    fields.push(proof.z_s1.clone());
+    fields.push(proof.z_r1.clone());
+    fields.push(proof.z_s2.clone());
+    fields.push(proof.z_r2.clone());
+}
+
+fn append_cs_add_proof_fields_for_pok_star(fields: &mut Vec<BigUint>, proof: &CsAddProof) {
+    fields.push(proof.e.clone());
+    fields.push(bigint_to_transcript_uint_ppb(&proof.z1));
+    fields.push(bigint_to_transcript_uint_ppb(&proof.z2));
+    fields.push(bigint_to_transcript_uint_ppb(&proof.z3));
+    fields.push(bigint_to_transcript_uint_ppb(&proof.z4));
+}
+
+fn append_cs_mult_proof_fields_for_pok_star(fields: &mut Vec<BigUint>, proof: &CsMultProof) {
+    fields.push(proof.r_y.clone());
+    fields.push(proof.r1.clone());
+    fields.push(proof.r2.clone());
+    fields.push(proof.r3.clone());
+    fields.push(proof.r4.clone());
+    fields.push(bigint_to_transcript_uint_ppb(&proof.z_y));
+    fields.push(bigint_to_transcript_uint_ppb(&proof.z_ry));
+    fields.push(bigint_to_transcript_uint_ppb(&proof.z1));
+    fields.push(bigint_to_transcript_uint_ppb(&proof.z2));
+    fields.push(bigint_to_transcript_uint_ppb(&proof.z3));
+    fields.push(bigint_to_transcript_uint_ppb(&proof.z4));
+}
+
+fn append_round_to_tau_for_pok_star(tau: &PoKTranscript, round: &crate::pok::PoKStarRoundProof) -> PoKTranscript {
+    let mut history = tau.history.clone();
+    append_commitment_fields_for_pok_star(&mut history, &round.c1);
+    append_commitment_fields_for_pok_star(&mut history, &round.c2);
+    append_commitment_fields_for_pok_star(&mut history, &round.c3);
+    append_commitment_fields_for_pok_star(&mut history, &round.c_alpha_e3);
+    append_commitment_fields_for_pok_star(&mut history, &round.c_p_prime);
+    history.push(round.alpha.clone());
+    history.push(round.cy_half.clone());
+    history.push(round.cy_alpha.clone());
+    history.push(round.pi_cy_alpha.r_commitment.clone());
+    history.push(round.pi_cy_alpha.z_r.clone());
+    append_cs_com_proof_fields_for_pok_star(&mut history, &round.pi_c1);
+    append_cs_com_proof_fields_for_pok_star(&mut history, &round.pi_c2);
+    append_cs_com_proof_fields_for_pok_star(&mut history, &round.pi_c3);
+    append_cs_com_proof_fields_for_pok_star(&mut history, &round.pi_c_alpha_e3);
+    append_cs_com_proof_fields_for_pok_star(&mut history, &round.pi_c_p_prime);
+    append_cs_add_proof_fields_for_pok_star(&mut history, &round.pi_e_eq_e1_plus_e2);
+    append_cs_mult_proof_fields_for_pok_star(&mut history, &round.pi_e2_eq_y_half_mul_e3);
+    append_cs_mult_proof_fields_for_pok_star(&mut history, &round.pi_alpha_mul_e3);
+    append_cs_add_proof_fields_for_pok_star(&mut history, &round.pi_eprime_eq_e1_plus_alphae3);
+
+    PoKTranscript {
+        cy: tau.cy.clone(),
+        c_values: tau.c_values.clone(),
+        c_p: tau.c_p.clone(),
+        history,
+    }
+}
+
+/// 验证当前 `PoKPProof` 格式中 verifier 可独立检查的公共部分。
 ///
-/// 核心策略：
-/// 1. 验证每一层中所有 `CS-com / CS-add / CS-mult` 子证明；
-/// 2. 复算该层 `alpha` 挑战，防止 transcript 被替换；
-/// 3. 用公开 `y` 和公开系数密文重建“下一层语句”，递归向下验证。
-fn verify_pok_star_recursive(
+/// 递归时按 `tau'=(pi,tau)` 追加公开轮次字段，因此每一层的 Fiat-Shamir
+/// `alpha` 都能由 verifier 重建，同时 `Cy_alpha` 必须证明其确实打开到该公开挑战。
+fn verify_pok_star_public_shell(
     params_ah: &CsCommitParams,
-    y: &BigUint,
+    params_df_for_alpha: &DfParams,
     root_cy: &BigUint,
     current_c_values: &[crate::cs::CsCiphertext],
-    current_c_p: &crate::cs::CsCiphertext,
     current_c_p_commitment: &CsCommitment,
     aux: &[PoKAuxEntry],
     proof: &PoKStarProof,
+    tau: &PoKTranscript,
 ) -> CryptoResult<bool> {
     if current_c_values.is_empty() || !current_c_values.len().is_power_of_two() {
         return Ok(false);
@@ -1991,7 +2092,220 @@ fn verify_pok_star_recursive(
             if current_c_values.len() != 1 {
                 return Ok(false);
             }
-            verify_cs_com(params_ah, current_c_p_commitment, pi_open_cp)
+            // 关键锚定（论文 Alg.2 基例 π1）：验证 CP 打开到【公开】的折叠输入
+            // 密文 current_c_values[0]，而不是只验证“存在某个开口”。
+            // 该公开值由验证方自己从公开密文 A_i 逐层折叠得到，完全脱离 prover
+            // 控制，因此堵住了“prover 任意伪造 E”的可靠性缺口。
+            verify_cs_com_ciphertext(
+                params_ah,
+                current_c_p_commitment,
+                &current_c_values[0],
+                pi_open_cp,
+            )
+        }
+        PoKStarProof::Recursive { round, next } => {
+            if current_c_values.len() < 2 || current_c_values.len() % 2 != 0 {
+                return Ok(false);
+            }
+
+            if !verify_cs_com(params_ah, &round.c1, &round.pi_c1)?
+                || !verify_cs_com(params_ah, &round.c2, &round.pi_c2)?
+                || !verify_cs_com(params_ah, &round.c3, &round.pi_c3)?
+                || !verify_cs_com(params_ah, &round.c_alpha_e3, &round.pi_c_alpha_e3)?
+                || !verify_cs_com(params_ah, &round.c_p_prime, &round.pi_c_p_prime)?
+            {
+                return Ok(false);
+            }
+
+            if !verify_cs_add(
+                params_ah,
+                &round.c1,
+                &round.c2,
+                current_c_p_commitment,
+                &round.pi_e_eq_e1_plus_e2,
+            )? {
+                return Ok(false);
+            }
+
+            let half = current_c_values.len() / 2;
+            let expected_cy_half = lookup_cy_for_power_from_aux(half, root_cy, aux)?;
+            if expected_cy_half != round.cy_half {
+                return Ok(false);
+            }
+
+            if !verify_cs_mult(
+                params_ah,
+                &round.c2,
+                &round.c3,
+                &round.cy_half,
+                &round.pi_e2_eq_y_half_mul_e3,
+            )? {
+                return Ok(false);
+            }
+
+            if !verify_cs_mult(
+                params_ah,
+                &round.c_alpha_e3,
+                &round.c3,
+                &round.cy_alpha,
+                &round.pi_alpha_mul_e3,
+            )? {
+                return Ok(false);
+            }
+
+            if !verify_df_open_public_scalar(
+                params_df_for_alpha,
+                &round.cy_alpha,
+                &round.alpha,
+                &round.pi_cy_alpha,
+            )? {
+                return Ok(false);
+            }
+
+            if !verify_cs_add(
+                params_ah,
+                &round.c1,
+                &round.c_alpha_e3,
+                &round.c_p_prime,
+                &round.pi_eprime_eq_e1_plus_alphae3,
+            )? {
+                return Ok(false);
+            }
+
+            let expected_alpha = fs_alpha_for_pok_star_verify(&round.c1, &round.c2, &round.c3, tau);
+            if expected_alpha != round.alpha {
+                return Ok(false);
+            }
+            let tau_next = append_round_to_tau_for_pok_star(tau, round);
+
+            let poly = CiphertextPolynomial::new(current_c_values.to_vec(), &params_ah.n2)?;
+            let (lower_poly, upper_poly) = poly.split_in_half();
+            let folded_poly = lower_poly.fold(&upper_poly, &round.alpha);
+            let next_values = folded_poly.coeffs().to_vec();
+
+            verify_pok_star_public_shell(
+                params_ah,
+                params_df_for_alpha,
+                root_cy,
+                &next_values,
+                &round.c_p_prime,
+                aux,
+                next,
+                &tau_next,
+            )
+        }
+    }
+}
+
+fn verify_pokp_public_components(
+    params_ah: &CsCommitParams,
+    params_df: &DfParams,
+    cy: &BigUint,
+    c_values: &[crate::cs::CsCiphertext],
+    proof: &PoKPProof,
+) -> CryptoResult<Option<crate::cs::CsCiphertext>> {
+    if c_values.is_empty() || !c_values.len().is_power_of_two() {
+        return Ok(None);
+    }
+    if proof.tau.cy != *cy || proof.tau.c_values.len() != c_values.len() {
+        return Ok(None);
+    }
+    if !proof.tau.history.is_empty() {
+        return Ok(None);
+    }
+    for (lhs, rhs) in proof.tau.c_values.iter().zip(c_values.iter()) {
+        if !ciphertext_eq_mod_n2(lhs, rhs, &params_ah.n2) {
+            return Ok(None);
+        }
+    }
+
+    let e_poly = proof.tau.c_p.clone();
+    let c_p_wrapped = com_ah_with_zero_randomness(params_ah, &e_poly)?;
+    if proof.c_p_commitment.c1 != c_p_wrapped.commitment.c1
+        || proof.c_p_commitment.c2 != c_p_wrapped.commitment.c2
+        || proof.c_p_commitment.c3 != c_p_wrapped.commitment.c3
+        || proof.c_p_commitment.c4 != c_p_wrapped.commitment.c4
+    {
+        return Ok(None);
+    }
+
+    let rounds = c_values.len().ilog2() as usize;
+    if proof.aux.len() != rounds {
+        return Ok(None);
+    }
+
+    let mut prev_cy = cy.clone();
+    for i in 1..=rounds {
+        let entry = &proof.aux[i - 1];
+        if entry.round != i {
+            return Ok(None);
+        }
+        if !verify_df_square_mult(params_df, &prev_cy, &entry.cy_2i, &entry.pi_y2i)? {
+            return Ok(None);
+        }
+        prev_cy = entry.cy_2i.clone();
+    }
+
+    let params_df_for_alpha = DfParams {
+        n: params_ah.n.clone(),
+        n2: params_ah.n2.clone(),
+        g: params_ah.g_prime.clone(),
+        h: params_ah.h_prime.clone(),
+    };
+
+    if !verify_pok_star_public_shell(
+        params_ah,
+        &params_df_for_alpha,
+        cy,
+        c_values,
+        &proof.c_p_commitment,
+        &proof.aux,
+        &proof.recursive_proof,
+        &proof.tau,
+    )? {
+        return Ok(None);
+    }
+
+    Ok(Some(e_poly))
+}
+
+/// 递归验证 `PoK*_P` 证明树。
+///
+/// 核心策略：
+/// 1. 验证每一层中所有 `CS-com / CS-add / CS-mult` 子证明；
+/// 2. 验证 `Cy_alpha` 对公开 `alpha` 的 DF 开口证明；
+/// 3. 按 `tau'=(pi,tau)` 复算每层 `alpha` 挑战；
+/// 4. 用公开 `y` 和公开系数密文重建“下一层语句”，递归向下验证。
+fn verify_pok_star_recursive(
+    params_ah: &CsCommitParams,
+    params_df_for_alpha: &DfParams,
+    y: &BigUint,
+    root_cy: &BigUint,
+    current_c_values: &[crate::cs::CsCiphertext],
+    current_c_p: &crate::cs::CsCiphertext,
+    current_c_p_commitment: &CsCommitment,
+    aux: &[PoKAuxEntry],
+    proof: &PoKStarProof,
+    tau: &PoKTranscript,
+) -> CryptoResult<bool> {
+    if current_c_values.is_empty() || !current_c_values.len().is_power_of_two() {
+        return Ok(false);
+    }
+
+    match proof {
+        PoKStarProof::Base { pi_open_cp } => {
+            if current_c_values.len() != 1 {
+                return Ok(false);
+            }
+            // 与 verify_pok_star_public_shell 保持一致：基例锚定到公开折叠值。
+            // （注意：本 `_recursive` 变体需要明文 y，仅为兼容保留，未接入真实
+            // 验证路径；真实路径是上面的 public_shell 版本。）
+            verify_cs_com_ciphertext(
+                params_ah,
+                current_c_p_commitment,
+                &current_c_values[0],
+                pi_open_cp,
+            )
         }
         PoKStarProof::Recursive { round, next } => {
             if current_c_values.len() < 2 || (current_c_values.len() % 2 != 0) {
@@ -2050,6 +2364,15 @@ fn verify_pok_star_recursive(
                 return Ok(false);
             }
 
+            if !verify_df_open_public_scalar(
+                params_df_for_alpha,
+                &round.cy_alpha,
+                &round.alpha,
+                &round.pi_cy_alpha,
+            )? {
+                return Ok(false);
+            }
+
             if !verify_cs_add(
                 params_ah,
                 &round.c1,
@@ -2060,15 +2383,11 @@ fn verify_pok_star_recursive(
                 return Ok(false);
             }
 
-            let tau_current = PoKTranscript {
-                cy: root_cy.clone(),
-                c_values: current_c_values.to_vec(),
-                c_p: current_c_p.clone(),
-            };
-            let expected_alpha = fs_alpha_for_pok_star_verify(&round.c1, &round.c2, &round.c3, &tau_current);
+            let expected_alpha = fs_alpha_for_pok_star_verify(&round.c1, &round.c2, &round.c3, tau);
             if expected_alpha != round.alpha {
                 return Ok(false);
             }
+            let tau_next = append_round_to_tau_for_pok_star(tau, round);
 
             let poly = CiphertextPolynomial::new(current_c_values.to_vec(), &params_ah.n2)?;
             let (lower_poly, upper_poly) = poly.split_in_half();
@@ -2087,6 +2406,7 @@ fn verify_pok_star_recursive(
 
             verify_pok_star_recursive(
                 params_ah,
+                params_df_for_alpha,
                 y,
                 root_cy,
                 &next_values,
@@ -2094,6 +2414,7 @@ fn verify_pok_star_recursive(
                 &round.c_p_prime,
                 aux,
                 next,
+                &tau_next,
             )
         }
     }
@@ -2118,6 +2439,10 @@ fn verify_pokp_proof(
     }
 
     if proof.tau.cy != *cy {
+        return Ok(false);
+    }
+
+    if !proof.tau.history.is_empty() {
         return Ok(false);
     }
 
@@ -2161,8 +2486,16 @@ fn verify_pokp_proof(
         prev_cy = entry.cy_2i.clone();
     }
 
+    let params_df_for_alpha = DfParams {
+        n: params_ah.n.clone(),
+        n2: params_ah.n2.clone(),
+        g: params_ah.g_prime.clone(),
+        h: params_ah.h_prime.clone(),
+    };
+
     verify_pok_star_recursive(
         params_ah,
+        &params_df_for_alpha,
         y,
         cy,
         c_values,
@@ -2170,6 +2503,33 @@ fn verify_pokp_proof(
         &proof.c_p_commitment,
         &proof.aux,
         &proof.recursive_proof,
+        &proof.tau,
+    )
+}
+
+fn verify_enc_mul_add_component(
+    params_ah: &CsCommitParams,
+    pk_ah: &CsPubKey,
+    c_plain: &BigUint,
+    c_scalar: &BigUint,
+    e_commitment: &CsCommitment,
+    z_component: &crate::cs::CsCiphertext,
+    proof: &PpbEncMulAddProof,
+) -> CryptoResult<bool> {
+    if !verify_cs_enc(params_ah, &pk_ah.k, &proof.c_enc, c_plain, &proof.pi_enc)? {
+        return Ok(false);
+    }
+    if !verify_cs_mult(params_ah, &proof.c_mul, e_commitment, c_scalar, &proof.pi_mult)? {
+        return Ok(false);
+    }
+
+    let z_commitment = build_enc_statement_commitment(params_ah, z_component);
+    verify_cs_add(
+        params_ah,
+        &proof.c_enc,
+        &proof.c_mul,
+        &z_commitment,
+        &proof.pi_add,
     )
 }
 
@@ -2192,9 +2552,107 @@ pub fn verify_poks2(
     c_y: &BigUint,
     escrow_out: &PpbEscrowOutput,
 ) -> CryptoResult<bool> {
-    // TODO: 待确认最终协议设计后实现完整验证逻辑。
-    let _ = (params, pk_a, c_y, escrow_out);
-    Ok(true)
+    if c_y != &escrow_out.c_y {
+        return Ok(false);
+    }
+
+    let proof = &escrow_out.pi_u;
+    let params_ah = build_cs_commit_params_from_user_proof(params, &proof.ah_g)?;
+    let n2 = &params.cpar.n2;
+
+    if &proof.c_id >= n2
+        || &proof.c_at >= n2
+        || &proof.c_r1 >= n2
+        || &proof.c_r2 >= n2
+        || &proof.c_r3 >= n2
+    {
+        return Ok(false);
+    }
+
+    let c_y_from_cid_cat = (&proof.c_id * &proof.c_at) % n2;
+    if !proof.pi_y.relation_holds
+        || proof.pi_y.c_y_from_cid_cat != *c_y
+        || c_y_from_cid_cat != *c_y
+    {
+        return Ok(false);
+    }
+
+    // sky 加密必须在【setup 固定的】 pk_sky 下完成：拒绝任何 prover 自带的
+    // pk_sky，否则直线可提取性失效（陷门无人持有）。
+    if proof.pk_sky != params.sky_pk {
+        return Ok(false);
+    }
+    let c_sky_statement = build_enc_statement_commitment(&params_ah, &proof.c_sky);
+    if !verify_cs_enc(
+        &params_ah,
+        &params.sky_pk.k,
+        &c_sky_statement,
+        c_y,
+        &proof.pi_sky,
+    )? {
+        return Ok(false);
+    }
+
+    let Some(e_poly) = verify_pokp_public_components(
+        &params_ah,
+        &params.cpar,
+        &proof.c_id,
+        &pk_a.x_public.encrypted_coeffs,
+        &proof.pi_poly,
+    )?
+    else {
+        return Ok(false);
+    };
+    let e_commitment = build_enc_statement_commitment(&params_ah, &e_poly);
+
+    // pi_nf 证明 Z_nf = E_poly ⊙ r3（r3 承诺于 c_r3）。结合修复后的 pi_poly
+    // （E_poly 已被基例锚定为真正的 Enc(P(y_id))），Dec(Z_nf)=0 等价于
+    // r3·P(y_id) ≡ 0 (mod n)。
+    //
+    // ⚠️ 残留缺口（非可框架性）：此处【未】证明 r3 在 mod n 下可逆（等价地
+    // r3 ≠ 0）。若恶意用户取 r3=0，则 Z_nf=Enc(0) 恒解密为 0，绕过 watchlist
+    // 门；在 Soundness 游戏中（敌手自选 x，故知道名单）可配合 r1 令 Z_id 命中
+    // 某个名单项，从而对一个非成员 y 得到 Dec≠⊥=f(x,y)，违反非可框架性。
+    //
+    // 正确修复需要证明 gcd(r3,n)=1（论文 Fig D.3 HECeval 把“r3=0⟹⊥”并入被证
+    // 关系；实现层对应论文 Remark 1 的 eqrep-n* 模 n 乘法证明：附带 C_{r3inv}
+    // 并证明 r3·r3inv ≡ 1 (mod n)）。该证明的可靠性依赖 DF 承诺基 (g,h) 的
+    // Paillier 结构（例如 h 取 n 次剩余以消去 (1+n)-分量），而当前 setup_ppb 里
+    // g,h 是无约束单位元，直接手搓会不可靠。故此处暂以断言/文档标注，
+    // 不落地一个可能不可靠的证明。TODO(non-frameability): 落地 r3 可逆证明
+    // 并相应约束 cpar 的 (g,h) 生成。
+    let z_nf_commitment = build_enc_statement_commitment(&params_ah, &escrow_out.z_hat.z_nf);
+    if !verify_cs_mult(
+        &params_ah,
+        &z_nf_commitment,
+        &e_commitment,
+        &proof.c_r3,
+        &proof.pi_nf,
+    )? {
+        return Ok(false);
+    }
+
+    if !verify_enc_mul_add_component(
+        &params_ah,
+        &pk_a.x_public.pk_ah,
+        &proof.c_id,
+        &proof.c_r1,
+        &e_commitment,
+        &escrow_out.z_hat.z_id,
+        &proof.pi_id,
+    )? {
+        return Ok(false);
+    }
+
+    verify_enc_mul_add_component(
+        &params_ah,
+        &pk_a.x_public.pk_ah,
+        &proof.c_at,
+        &proof.c_r2,
+        &e_commitment,
+        &escrow_out.z_hat.z_at,
+        &proof.pi_at,
+    )
 }
 
 /// VerEscrow(Λ, pkA, Cy, Z=(Ẑ, πU))。
@@ -2633,7 +3091,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "verify_poks2 is currently stubbed; re-enable after full implementation"]
     fn test_verify_poks2_rejects_tampered_statement_commitment() {
         // 该用例验证“反例”：
         // 1) 先生成一份本来合法的 escrow 输出；
@@ -2665,6 +3122,99 @@ mod tests {
 
         let ok = verify_poks2(&params, &pk_a, &out.c_y, &out).expect("verify should run");
         // false 条件：任一子证明验证失败（这里会在 pi_id 的 mult/add 链路失败）。
+        assert!(!ok);
+    }
+
+    fn valid_poks2_fixture() -> (PpbParams, PpbPublicKey, PpbEscrowOutput) {
+        let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
+        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let fk = HecFunctionKey { n: x.len(), k: 1 };
+        let r_x = BigUint::from(37u32);
+        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
+
+        let y = HecEvalInput {
+            y_id: BigUint::from(11u32),
+            y_at: BigUint::from(29u32),
+        };
+        let r_y = BigUint::from(41u32);
+        let out = escrow_ppb(&params, &pk_a, &y, &r_y)
+            .expect("escrow should run")
+            .expect("escrow output should exist");
+
+        (params, pk_a, out)
+    }
+
+    #[test]
+    fn test_verify_poks2_rejects_tampered_pi_sky() {
+        let (params, pk_a, mut out) = valid_poks2_fixture();
+        out.pi_u.pi_sky.z_y += BigInt::from(1u32);
+
+        let ok = verify_poks2(&params, &pk_a, &out.c_y, &out).expect("verify should run");
+        assert!(!ok);
+    }
+
+    /// 修复2回归测试：sky 公钥必须等于 setup 固定的 params.sky_pk。
+    /// 若 prover 自带另一把 pk_sky（旧实现允许，导致直线可提取性失效），
+    /// verify_poks2 必须直接拒绝。
+    #[test]
+    fn test_verify_poks2_rejects_prover_supplied_sky_pk() {
+        let (params, pk_a, mut out) = valid_poks2_fixture();
+
+        // 用一把与 params.sky_pk 不同的公钥替换证明里的 pk_sky。
+        let (other_pk, _other_sk) =
+            keygen_cs(&params.hecpar.cs_params).expect("keygen should succeed");
+        assert_ne!(other_pk, params.sky_pk);
+        out.pi_u.pk_sky = other_pk;
+
+        let ok = verify_poks2(&params, &pk_a, &out.c_y, &out).expect("verify should run");
+        assert!(!ok);
+    }
+
+    #[test]
+    fn test_verify_poks2_rejects_tampered_pi_nf() {
+        let (params, pk_a, mut out) = valid_poks2_fixture();
+        out.pi_u.pi_nf.z1 += BigInt::from(1u32);
+
+        let ok = verify_poks2(&params, &pk_a, &out.c_y, &out).expect("verify should run");
+        assert!(!ok);
+    }
+
+    #[test]
+    fn test_verify_poks2_rejects_tampered_pi_poly_anchor() {
+        let (params, pk_a, mut out) = valid_poks2_fixture();
+        out.pi_u.pi_poly.c_p_commitment.c1 =
+            (&out.pi_u.pi_poly.c_p_commitment.c1 + BigUint::from(1u32)) % &params.cpar.n2;
+
+        let ok = verify_poks2(&params, &pk_a, &out.c_y, &out).expect("verify should run");
+        assert!(!ok);
+    }
+
+    #[test]
+    fn test_verify_poks2_rejects_tampered_pi_poly_cy_alpha() {
+        let (params, pk_a, mut out) = valid_poks2_fixture();
+        match &mut out.pi_u.pi_poly.recursive_proof {
+            PoKStarProof::Recursive { round, .. } => {
+                round.cy_alpha = (&round.cy_alpha + BigUint::from(1u32)) % &params.cpar.n2;
+            }
+            PoKStarProof::Base { .. } => panic!("fixture should produce a recursive PoK* proof"),
+        }
+
+        let ok = verify_poks2(&params, &pk_a, &out.c_y, &out).expect("verify should run");
+        assert!(!ok);
+    }
+
+    #[test]
+    fn test_verify_poks2_rejects_tampered_pi_poly_cy_alpha_opening() {
+        let (params, pk_a, mut out) = valid_poks2_fixture();
+        match &mut out.pi_u.pi_poly.recursive_proof {
+            PoKStarProof::Recursive { round, .. } => {
+                round.pi_cy_alpha.z_r += BigUint::from(1u32);
+            }
+            PoKStarProof::Base { .. } => panic!("fixture should produce a recursive PoK* proof"),
+        }
+
+        let ok = verify_poks2(&params, &pk_a, &out.c_y, &out).expect("verify should run");
         assert!(!ok);
     }
 
@@ -2718,7 +3268,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "verify_poks2 is currently stubbed; re-enable after full implementation"]
     fn test_verify_escrow_rejects_when_vs2_fails() {
         // 反例 2：保留合法 pkA，但篡改 pi_U 子语句使 VS2 失败，VerEscrow 应返回 false。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
@@ -2784,7 +3333,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "verify_poks2 is currently stubbed; re-enable after full implementation"]
     fn test_dec_ppb_returns_none_when_verescrow_fails() {
         // 反例：若 VerEscrow 失败，Dec 必须返回 None（算法中的 ⊥）。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");

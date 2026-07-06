@@ -11,6 +11,11 @@ pub struct Signature<E: Pairing> {
 }
 
 impl<E: Pairing> Signature<E> {
+    /// Return the three group elements `(sigma_1, sigma_2, sigma_3)`.
+    pub fn components(&self) -> (E::G1, E::G1, E::G2) {
+        (self.z, self.y1, self.y2)
+    }
+
     /// Convert the signature.
     /// This function converts the signature to a new signature that is equivalent to the original signature.
     /// The input scalar `p` must be the same as the one used in the conversion of the public key and the secret key.
@@ -38,7 +43,7 @@ impl<E: Pairing> Signature<E> {
     }
 
     /// Convert the signature with a scalar `f`.
-    pub(crate) fn convert_with_f(&mut self, p: E::ScalarField, f: E::ScalarField) {
+    pub fn convert_with_f(&mut self, p: E::ScalarField, f: E::ScalarField) {
         self.z *= p * f;
         self.y1 *= E::ScalarField::one() / f;
         self.y2 *= E::ScalarField::one() / f;

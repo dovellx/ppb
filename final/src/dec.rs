@@ -3,7 +3,7 @@
 //! 输入：全局参数 Λ、公钥 pk_Λ、私钥 sk_Λ、DF 承诺 C_y2、Escrow2 输出 Z。
 //! 输出：(f_t(x, y), π_z) 或 ⊥。
 //!
-//! 算法流程（忽略 Z 证明 π_y 部分）：
+//! 算法流程：
 //! 1. 解析 Λ、pk_Λ、sk_Λ、Z；
 //! 2. 调用 VerEscrow(Λ, pk_Λ, C_y2, Z) 验证 Escrow 正确性；
 //! 3. 若验证通过，调用 BLUE.Dec(Λ_BLUE, sk_Λ2, C_y2, Z_2) 解密；
@@ -121,10 +121,8 @@ mod tests {
     // 测试 1: ℓ > t 时，解密应返回有效结果
     // ================================================================
     // x = [1,2,3,4], split: x1=[1,2,3], x2=[4]。
-    // Endorse 需要 y_id ∈ x1（sk1 解密），Dec 需要 y_id ∈ x2（sk2 解密）。
-    // 由于 x1 ∩ x2 = ∅，分两阶段使用不同 y_id：
-    //   - Escrow1 + Endorse 用 y_id=3 ∈ x1，得到有效 SPS 签名 σ_y；
-    //   - Escrow2 + Dec 用 y_id=4 ∈ x2，σ_y 只绑定 (C*_y1, inv) 不绑定 y。
+    // Endorse 在 y_id 不属于 x1 时签名；Dec 在 y_id 属于 x2 时恢复结果。
+    // 对 x=[1,2,3,4]，y_id=4 同时满足这两个条件。
     #[test]
     fn test_dec_large_list_returns_result() {
         let lambda = test_lambda();
@@ -134,15 +132,14 @@ mod tests {
         let s = vec![BigUint::from(1u32), BigUint::from(2u32)];
         let ((pk, sk), _c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
-        // 阶段 1：Escrow1 + Endorse（y_id=3 ∈ x1=[1,2,3]）
-        let y_endorse = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+        let y = rust::HecEvalInput {
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
         let r_star_y1 = BigUint::from(53u32);
 
-        let escrow1_out = crate::escrow1::escrow1(&lambda, &pk, &y_endorse, &r_y1, &r_star_y1);
+        let escrow1_out = crate::escrow1::escrow1(&lambda, &pk, &y, &r_y1, &r_star_y1);
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
@@ -150,14 +147,9 @@ mod tests {
         let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
-        // 阶段 2：Escrow2 + Dec（y_id=4 ∈ x2=[4]）
-        let y_dec = rust::HecEvalInput {
-            y_id: BigUint::from(4u32),
-            y_at: BigUint::from(7u32),
-        };
         let r_y2 = BigUint::from(67u32);
 
-        let z = crate::escrow2::escrow2(&lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y)
+        let z = crate::escrow2::escrow2(&lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1, sigma_y)
             .expect("Escrow2 should succeed");
 
         let result = dec(&lambda, &pk, &sk, &z.c_y2, &z);
@@ -225,16 +217,15 @@ mod tests {
         let s = vec![BigUint::from(1u32), BigUint::from(2u32)];
         let ((pk, sk), _c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
-        // 阶段 1：Escrow1 + Endorse（y_id=3 ∈ x1）
-        let y_endorse = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+        let y = rust::HecEvalInput {
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
         let r_y2 = BigUint::from(67u32);
         let r_star_y1 = BigUint::from(53u32);
 
-        let escrow1_out = crate::escrow1::escrow1(&lambda, &pk, &y_endorse, &r_y1, &r_star_y1);
+        let escrow1_out = crate::escrow1::escrow1(&lambda, &pk, &y, &r_y1, &r_star_y1);
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
@@ -242,13 +233,7 @@ mod tests {
         let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
-        // 阶段 2：Escrow2（y_id=4 ∈ x2）
-        let y_dec = rust::HecEvalInput {
-            y_id: BigUint::from(4u32),
-            y_at: BigUint::from(7u32),
-        };
-
-        let z = crate::escrow2::escrow2(&lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y)
+        let z = crate::escrow2::escrow2(&lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1, sigma_y)
             .expect("Escrow2 should succeed");
 
         // 使用错误的公钥解密 → escrow_verify 中 SPS 验证应失败

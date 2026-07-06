@@ -32,3 +32,17 @@ pub fn change_representation<E: Pairing, R: RngCore>(
 
     message.iter_mut().for_each(|mi| *mi *= u);
 }
+
+/// Change representation using caller-provided randomness.
+///
+/// This is useful for protocols that must prove knowledge of the exact
+/// representation-change randomness.
+pub fn change_representation_with_randomness<E: Pairing>(
+    message: &mut [E::G1],
+    signature: &mut Signature<E>,
+    u: E::ScalarField,
+    f: E::ScalarField,
+) {
+    signature.convert_with_f(u, f);
+    message.iter_mut().for_each(|mi| *mi *= u);
+}

@@ -20,6 +20,7 @@ use ark_bls12_381::G1Projective;
 use rust::{escrow_ppb, HecEvalInput, PpbEscrowOutput};
 
 use crate::keygen::PublicKey;
+use crate::s2::map_eval_input_to_scalar;
 use crate::setup::Lambda;
 
 /// Algorithm 6: Escrow1 的输出结果。
@@ -41,22 +42,6 @@ pub struct Escrow1Output {
     pub c_star_y1: Option<G1Projective>,
     // TODO: π_1 ← ZKProveS1(...)
     // 当前暂未实现 ZK 证明，后续接入时扩展此字段。
-}
-
-/// 将 HecEvalInput 类型的 y 映射为可被承诺方案使用的标量消息。
-///
-/// 映射方式与 ppb 模块中 map_y_to_df_message 保持一致：
-///   m_y = (y_id + y_at) mod n
-///
-/// 这样设计的原因：
-/// 1. DF 承诺方案的消息类型为单个 BigUint；
-/// 2. HecEvalInput 包含两个分量 (y_id, y_at)，需要合并为一个标量；
-/// 3. 后续配合 r_y = r_id + r_at (mod n)，可保证
-///    C_y = C_id * C_at mod n^2 的同态性质。
-fn map_y_to_scalar(y: &HecEvalInput, n: &BigUint) -> BigUint {
-    let y_id = &y.y_id % n;
-    let y_at = &y.y_at % n;
-    (y_id + y_at) % n
 }
 
 /// Algorithm 6: Escrow1(Λ, pk_Λ, y, r_y1, r*_y1) -> (Z_1, C_y1, C*_y1, π_1)
@@ -114,7 +99,7 @@ pub fn escrow1(
         // 将 y 映射为标量消息 m_y = (y_id + y_at) mod n，
         // 然后使用 DF 承诺方案计算 C_y1 = g^{m_y} * h^{r_y1} mod n^2。
         let n = &lambda.cpar.n;
-        let m_y = map_y_to_scalar(y, n);
+        let m_y = map_eval_input_to_scalar(y, n);
         // 调用 df.rs 中的 commit_df_with_opening 计算 C_y1 = g^{m_y} * h^{r_y1} mod n^2
         let c_y1 = rust::commit_df_with_opening(&lambda.cpar, &m_y, r_y1)
             .expect("DF commitment computation failed");

@@ -4,7 +4,7 @@
 //!       Pedersen 承诺随机数 r*_y1、DF 承诺随机数 r_y2、
 //!       Pedersen 承诺 C*_y1、签名 σ_y。
 //!
-//! 输出：Z（包含 Z'_1, Z_2）、C_y2（DF 承诺）。
+//! 输出：Z（包含 Z'_1, Z_2, π_y）、C_y2（DF 承诺）。
 //!
 //! 算法流程：
 //! 1. 解析 Λ 和 pk_Λ；
@@ -13,19 +13,20 @@
 //! 4. 若 pk_Λ1 = ⊥，返回 Z = ((⊥,⊥), Z_2), C_y2；
 //! 5. 若 pk_Λ1 ≠ ⊥ 且 SPS.Verify(pk_SPS, M, σ_y) = 1，
 //!    采样 µ 并调用 ChangeRep 得到 M', σ'_y，
-//!    返回 Z = ((M', σ'_y), Z_2), C_y2；
+//!    生成 π_y ← ZKProveS2(...)，
+//!    返回 Z = ((M', σ'_y), Z_2, π_y), C_y2；
 //! 6. 否则返回 ⊥。
 
+use ark_bls12_381::{Fr, G1Projective};
+use ark_ff::{UniformRand, Zero};
 use num_bigint::BigUint;
-use ark_ff::UniformRand;
-
-use ark_bls12_381::G1Projective;
 
 use rust::{escrow_ppb, HecEvalInput, PpbEscrowOutput};
 
 use mercurial_signature::Signature as MsSignature;
 
 use crate::keygen::PublicKey;
+use crate::s2::{self, S2Proof, S2Witness};
 use crate::setup::Lambda;
 
 /// SPS.ChangeRep 后的消息-签名对 (M', σ'_y)。
@@ -44,18 +45,21 @@ pub struct EscrowZ1Prime {
 ///
 /// 字段语义：
 /// 1. `z1_prime`：Z'_1 = (M', σ'_y)，
-///    当 pk_Λ1 = ⊥ 时为 Some(EscrowZ1Prime { msg: vec![], sig: ... })（空消息），
+///    当 pk_Λ1 = ⊥ 时为 None，
 ///    当 pk_Λ1 ≠ ⊥ 且验证通过时为 Some(...)（非空），
 ///    当验证失败时整个函数返回 None；
 /// 2. `z2`：BLUE.Escrow(Λ_BLUE, pk_Λ2, y; r_y2)；
-/// 3. `c_y2`：DF 承诺值 C_y2 = Com(cpar, y; r_y2) ∈ Z_{n^2}。
+/// 3. `c_y2`：DF 承诺值 C_y2 = Com(cpar, y; r_y2) ∈ Z_{n^2}；
+/// 4. `pi_y`：Algorithm 13 的 S2 证明，pk_Λ1 = ⊥ 时为 None。
 pub struct Escrow2Output {
-    /// Z'_1 = (M', σ'_y)，pk_Λ1 = ⊥ 时 msg 为空。
+    /// Z'_1 = (M', σ'_y)，pk_Λ1 = ⊥ 时为 None。
     pub z1_prime: Option<EscrowZ1Prime>,
     /// Z_2 = BLUE.Escrow(Λ_BLUE, pk_Λ2, y; r_y2)。
     pub z2: PpbEscrowOutput,
     /// C_y2 = Com(cpar, y; r_y2)，DF 承诺值。
     pub c_y2: BigUint,
+    /// π_y = ZKProveS2(...)。
+    pub pi_y: Option<S2Proof>,
 }
 
 /// Algorithm 8: Escrow2(Λ, pk_Λ, y, r*_y1, r_y2, C*_y1, σ_y) -> (Z, C_y2)
@@ -74,7 +78,7 @@ pub fn escrow2(
     lambda: &Lambda,
     pk: &PublicKey,
     y: &HecEvalInput,
-    _r_star_y1: &BigUint,
+    r_star_y1: &BigUint,
     r_y2: &BigUint,
     c_star_y1: &G1Projective,
     sigma_y: &MsSignature,
@@ -112,12 +116,7 @@ pub fn escrow2(
     // ============================================================
     // 将 y 映射为标量消息 m_y = (y_id + y_at) mod n，
     // 然后使用 DF 承诺方案计算 C_y2 = g^{m_y} * h^{r_y2} mod n^2。
-    let n = &lambda.cpar.n;
-    let m_y = {
-        let y_id = &y.y_id % n;
-        let y_at = &y.y_at % n;
-        (y_id + y_at) % n
-    };
+    let m_y = s2::map_eval_input_to_scalar(y, &lambda.cpar.n);
     let c_y2 = rust::commit_df_with_opening(&lambda.cpar, &m_y, r_y2)
         .expect("DF commitment computation failed");
 
@@ -132,6 +131,7 @@ pub fn escrow2(
                 z1_prime: None,
                 z2,
                 c_y2: c_y2.c,
+                pi_y: None,
             })
         }
         Some(_pk1) => {
@@ -151,23 +151,43 @@ pub fn escrow2(
             // ============================================================
             // Step 7: µ ∈$ MSC; r ∈$ MSR
             // ============================================================
-            // 采样随机标量 µ ∈ Fr（BLS12-381 标量域）。
-            // r 由 change_representation 内部采样。
+            // 采样随机标量 µ 和非零表示变换随机数 r ∈ Fr。
             let mut rng = ark_std::rand::rngs::OsRng;
-            let mu = ark_bls12_381::Fr::rand(&mut rng);
+            let mu = Fr::rand(&mut rng);
+            let mut rep_randomness = Fr::rand(&mut rng);
+            while rep_randomness.is_zero() {
+                rep_randomness = Fr::rand(&mut rng);
+            }
 
             // ============================================================
             // Step 8: M', σ'_y ← SPS.ChangeRep(pk_SPS, M, σ_y, µ; r)
             // ============================================================
-            // 调用 mercurial-signature 的 change_representation 函数。
-            // 该函数会：
-            //   1. 内部采样随机标量 f（对应算法中的 r）；
-            //   2. 对签名执行 σ'.z = σ.z * (µ * f), σ'.y1 = σ.y1 / f, σ'.y2 = σ.y2 / f；
-            //   3. 对消息执行 M'[i] = M[i] * µ。
-            // 变换后的 (M', σ'_y) 仍然满足验证等式。
+            // 使用显式随机数执行 ChangeRep，供 S2 证明 witness 使用。
             let mut msg_mut = msg.clone();
             let mut sig_mut = sigma_y.clone();
-            mercurial_signature::change_representation(&mut rng, &mut msg_mut, &mut sig_mut, mu);
+            mercurial_signature::change_representation_with_randomness(
+                &mut msg_mut,
+                &mut sig_mut,
+                mu,
+                rep_randomness,
+            );
+
+            let pi_y = s2::prove_s2(
+                lambda,
+                pk_sps,
+                &msg_mut,
+                &sig_mut,
+                &c_y2.c,
+                S2Witness {
+                    c_star_y1,
+                    sigma_y,
+                    mu,
+                    rep_randomness,
+                    y: &m_y,
+                    r_star_y1,
+                    r_y2,
+                },
+            )?;
 
             // ============================================================
             // Step 9: Z'_1 = (M', σ'_y)
@@ -178,12 +198,13 @@ pub fn escrow2(
             });
 
             // ============================================================
-            // Step 10: return Z = (Z'_1, Z_2), C_y2
+            // Step 10: return Z = (Z'_1, Z_2, π_y), C_y2
             // ============================================================
             Some(Escrow2Output {
                 z1_prime,
                 z2,
                 c_y2: c_y2.c,
+                pi_y: Some(pi_y),
             })
         }
     }
@@ -223,7 +244,7 @@ mod tests {
 
         // 生成 Escrow1 输出
         let y = HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -245,6 +266,7 @@ mod tests {
 
         // pk_Λ1 存在时，Z'_1 应为 Some 且消息非空
         assert!(output.z1_prime.is_some(), "Z'_1 should exist when pk_Λ1 ≠ ⊥");
+        assert!(output.pi_y.is_some(), "π_y should exist when pk_Λ1 ≠ ⊥");
         let z1p = output.z1_prime.as_ref().unwrap();
         assert_eq!(z1p.msg.len(), 2, "M' should have 2 G1 points");
         assert!(output.c_y2 > BigUint::from(0u32), "C_y2 must be non-zero");
@@ -301,6 +323,7 @@ mod tests {
 
         // pk_Λ1 = ⊥ 时，Z'_1 应为 None
         assert!(output.z1_prime.is_none(), "Z'_1 should be None when pk_Λ1 = ⊥");
+        assert!(output.pi_y.is_none(), "π_y should be None when pk_Λ1 = ⊥");
         assert!(output.c_y2 > BigUint::from(0u32), "C_y2 must be non-zero");
     }
 
@@ -318,7 +341,7 @@ mod tests {
         let ((pk, sk), _c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
         let y = HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -361,7 +384,7 @@ mod tests {
         let ((pk, sk), _c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
         let y = HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -379,9 +402,9 @@ mod tests {
         let output = escrow2(&lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1, sigma_y)
             .expect("Escrow2 should return Some");
 
-        // 手动计算：m_y = (3 + 7) mod n = 10
-        // C_y2 = g^{10} * h^{67} mod n^2
-        let m_y = (BigUint::from(3u32) + BigUint::from(7u32)) % n;
+        // 手动计算：m_y = (4 + 7) mod n = 11
+        // C_y2 = g^{11} * h^{67} mod n^2
+        let m_y = (BigUint::from(4u32) + BigUint::from(7u32)) % n;
         let expected = (&lambda.cpar.g.modpow(&m_y, n2)
             * &lambda.cpar.h.modpow(&r_y2, n2))
             % n2;
@@ -403,7 +426,7 @@ mod tests {
         let ((pk, sk), _c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
         let y = HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -426,5 +449,39 @@ mod tests {
             .expect("Escrow2 should return Some");
 
         assert_ne!(out_a.c_y2, out_b.c_y2, "different r_y2 should yield different C_y2");
+    }
+
+    #[test]
+    fn test_escrow2_rejects_mismatched_y_and_c_star() {
+        let lambda = test_lambda();
+
+        let x: Vec<BigUint> = (1..=4).map(|i| BigUint::from(i as u32)).collect();
+        let r_x = vec![BigUint::from(10u32), BigUint::from(20u32)];
+        let s = vec![BigUint::from(1u32), BigUint::from(2u32)];
+        let ((pk, sk), _c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
+
+        let y_signed = HecEvalInput {
+            y_id: BigUint::from(4u32),
+            y_at: BigUint::from(7u32),
+        };
+        let r_y1 = BigUint::from(41u32);
+        let r_star_y1 = BigUint::from(53u32);
+        let escrow1_out = crate::escrow1::escrow1(&lambda, &pk, &y_signed, &r_y1, &r_star_y1);
+
+        let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
+        let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
+        let z1 = escrow1_out.z1.as_ref().unwrap();
+
+        let endorse_out = endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
+
+        let y_other = HecEvalInput {
+            y_id: BigUint::from(5u32),
+            y_at: BigUint::from(7u32),
+        };
+        let r_y2 = BigUint::from(67u32);
+
+        let output = escrow2(&lambda, &pk, &y_other, &r_star_y1, &r_y2, c_star_y1, sigma_y);
+        assert!(output.is_none(), "S2 should reject mismatched y and C*_y1");
     }
 }

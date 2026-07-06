@@ -200,10 +200,10 @@ mod tests {
         let s = vec![BigUint::from(1u32), BigUint::from(2u32)];
         let ((pk, sk), c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
-        // Escrow1 + Endorse (y_id=3 ∈ x1=[1,2,3])
+        // Escrow1 + Endorse (y_id=4 ∉ x1=[1,2,3])
         // This generates the SPS signature that binds (C*_y1, inv)
         let y_endorse = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -315,7 +315,7 @@ mod tests {
 
         // Escrow1 + Endorse
         let y_endorse = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -371,7 +371,7 @@ mod tests {
 
         // Escrow1 + Endorse
         let y_endorse = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -426,7 +426,7 @@ mod tests {
 
         // Escrow1 + Endorse
         let y_endorse = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -482,7 +482,7 @@ mod tests {
 
         // Generate escrow with original key
         let y_endorse = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);

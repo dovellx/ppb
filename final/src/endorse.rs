@@ -11,7 +11,7 @@
 //! 2. 调用 ppb 的 VerEscrow 检验 Z_1 的正确性；
 //! 3. 若验证失败，返回 ⊥；
 //! 4. 调用 ppb 的 Dec 解密得到 y*；
-//! 5. 若 ℓ > t 且 y* ≠ ⊥，构造消息 M = (C*_y1, inv) 并用 Mercurial Signature 签名。
+//! 5. 若 ℓ > t 且 y* = ⊥，构造消息 M = (C*_y1, inv) 并用 Mercurial Signature 签名。
 
 use num_bigint::BigUint;
 
@@ -28,7 +28,7 @@ use crate::setup::Lambda;
 ///
 /// 字段语义：
 /// 1. `sigma_sps`：对消息 M = (C*_y1, inv) 的 Mercurial Signature；
-/// 2. `y_star`：Dec 解密输出 y*（命中时为 Some(y_id, y_at)，否则为 None）。
+/// 2. `y_star`：Dec 解密输出 y*（前半名单命中时为 Some(y_id, y_at)，否则为 None）。
 pub struct EndorseOutput {
     /// σ_SPS = SPS.Sign(sk_SPS, M)，Mercurial Signature 签名。
     pub sigma_sps: Option<MsSignature>,
@@ -122,46 +122,31 @@ pub fn endorse(
     let dec_result = rust::dec_ppb(&lambda.lambda_blue, sk1, c_y1, z1)
         .expect("Dec computation failed");
 
-    let y_star = match dec_result {
-        Some(dec_out) => dec_out.z,
-        None => {
-            return EndorseOutput {
-                sigma_sps: None,
-                y_star: None,
-            };
+    if let Some(dec_out) = dec_result {
+        EndorseOutput {
+            sigma_sps: None,
+            y_star: dec_out.z,
         }
-    };
-
-    // ============================================================
-    // Step 6: ℓ > t 且 y* ≠ ⊥ 时，构造并签名 M
-    // ============================================================
-    if let (Some(_y), Some(_pk_sps), Some(sk_sps)) =
-        (&y_star, &pk.pk_sps, &sk.sk_sps)
-    {
+    } else if let (Some(_pk_sps), Some(sk_sps)) = (&pk.pk_sps, &sk.sk_sps) {
         // ============================================================
-        // Step 7: M = (C*_y1, inv)
+        // Step 6: ℓ > t 且 y* = ⊥ 时，构造并签名 M
         // ============================================================
-        // 构造消息 M 为 G1 点向量：
-        //   M[0] = C*_y1（Pedersen 承诺椭圆曲线点）
-        //   M[1] = inv（随机 G1 群元素，来自全局参数 Λ）
         let msg: Vec<G1Projective> = vec![c_star_y1.clone(), lambda.inv];
 
         // ============================================================
-        // Step 8: σ_SPS ← SPS.Sign(sk_SPS, M)
+        // Step 7: σ_SPS ← SPS.Sign(sk_SPS, M)
         // ============================================================
-        // 使用 Mercurial Signature 的 sign 方法对 M 进行签名。
         let mut rng = ark_std::rand::rngs::OsRng;
         let sigma_sps = sk_sps.sign(&mut rng, &lambda.pp, &msg);
 
         EndorseOutput {
             sigma_sps: Some(sigma_sps),
-            y_star,
+            y_star: None,
         }
     } else {
-        // ℓ ≤ t 或 y* = ⊥ 的情况，不生成签名。
         EndorseOutput {
             sigma_sps: None,
-            y_star,
+            y_star: None,
         }
     }
 }
@@ -183,7 +168,7 @@ mod tests {
     }
 
     // ================================================================
-    // 测试 1: ℓ > t 时，Endorse 应返回有效输出
+    // 测试 1: ℓ > t 且 y 不在前半名单时，Endorse 应返回签名
     // ================================================================
 
     #[test]
@@ -198,7 +183,7 @@ mod tests {
 
         // 先生成 Escrow1 输出
         let y = HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -211,9 +196,8 @@ mod tests {
 
         let output = endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
 
-        // ℓ > t 且 Escrow 有效时，签名应存在
-        assert!(output.sigma_sps.is_some(), "σ_SPS should exist when ℓ > t and escrow valid");
-        assert!(output.y_star.is_some(), "y* should exist when escrow valid");
+        assert!(output.sigma_sps.is_some(), "σ_SPS should exist when y* = ⊥");
+        assert!(output.y_star.is_none(), "y* should be None when y is not in the prefix");
     }
 
     // ================================================================
@@ -259,7 +243,7 @@ mod tests {
         let ((pk, sk), _c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
         let y = HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -280,7 +264,7 @@ mod tests {
     }
 
     // ================================================================
-    // 测试 4: y* 匹配原始输入
+    // 测试 4: y 在前半名单中时，y* 匹配原始输入且不签名
     // ================================================================
 
     #[test]
@@ -306,6 +290,7 @@ mod tests {
 
         let output = endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
 
+        assert!(output.sigma_sps.is_none(), "σ_SPS should not exist when y* is recovered");
         let y_star = output.y_star.as_ref().unwrap();
         let n = &lambda.cpar.n;
         assert_eq!(y_star.y_id, y.y_id % n, "y*_id should match y_id mod n");

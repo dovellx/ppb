@@ -77,7 +77,7 @@ pub fn escrow_update(
     pk: &PublicKey,
     y: &rust::HecEvalInput,
     r_star_y1: &BigUint,
-    r_y2: &BigUint,
+    _r_y2: &BigUint,
     c_star_y1: &ark_bls12_381::G1Projective,
     z: &escrow2::Escrow2Output,
     pk_prime: &PublicKey,
@@ -215,9 +215,7 @@ pub fn escrow_update(
         // Step 15: Z', C'_y2 ← Escrow2(Λ, pk'_Λ, y, r*_y1', r'_y2, C*_y1', σ*_y)
         // ============================================================
         // 使用新公钥 pk'_Λ、复用的旧签名 σ*_y 和新随机数执行 Escrow2。
-        // 注意：此处用旧的 r_y2（而非 r'_y2）传给 Escrow2 的第 5 个参数，
-        // 因为算法中 r*_y1' 对应 Escrow2 的第 3 个参数（r*_y1），
-        // r'_y2 对应第 4 个参数（r_y2）。
+        // r'_y2 对应 Escrow2 的 DF 承诺随机数参数。
         let escrow2_out = match escrow2::escrow2(
             lambda,
             pk_prime,
@@ -326,7 +324,7 @@ mod tests {
 
         // --- 初始 Escrow（使用旧公钥） ---
         let y = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(16u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -412,7 +410,7 @@ mod tests {
 
         // --- 初始 Escrow ---
         let y = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -490,7 +488,7 @@ mod tests {
         let ((pk, sk), c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
         let y = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);

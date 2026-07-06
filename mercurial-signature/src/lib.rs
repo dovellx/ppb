@@ -4,6 +4,7 @@ mod params;
 mod public_key;
 mod representation;
 pub use representation::change_representation;
+pub use representation::change_representation_with_randomness;
 mod secret_key;
 mod signature;
 

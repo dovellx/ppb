@@ -3,13 +3,14 @@
 //! 输入：全局参数 Λ、公钥 pk_Λ、DF 承诺 C_y2、Escrow2 输出 Z。
 //! 输出：{0, 1}（验证通过返回 true，失败返回 false）。
 //!
-//! 算法流程（忽略 ZK 证明 π_y 部分）：
+//! 算法流程：
 //! 1. 解析 Λ 和 pk_Λ；
 //! 2. 解析 Z = (Z'_1, Z_2)；
 //! 3. 若 pk_Λ1 ≠ ⊥ 且 Z'_1 ≠ ⊥：
 //!    a. 验证 SPS.Verify(pk_SPS, M', σ'_y) = 1；
 //!    b. 验证 BLUE.VerEscrow(Λ_BLUE, pk_Λ2, C_y2, Z_2) = 1；
-//!    c. 两者均通过则返回 true；
+//!    c. 验证 ZKVerifyS2((M', σ'_y, pk_SPS, C_y2, inv), π_y) = 1；
+//!    d. 三者均通过则返回 true；
 //! 4. 若 pk_Λ1 = ⊥：
 //!    a. 验证 BLUE.VerEscrow(Λ_BLUE, pk_Λ2, C_y2, Z_2) = 1；
 //!    b. 通过则返回 true；
@@ -19,6 +20,7 @@ use num_bigint::BigUint;
 
 use crate::escrow2::Escrow2Output;
 use crate::keygen::PublicKey;
+use crate::s2;
 use crate::setup::Lambda;
 
 /// Algorithm 10: EscrowVerify(Λ, pk_Λ, C_y2, Z) -> {0, 1}
@@ -72,14 +74,27 @@ pub fn escrow_verify(
             // ============================================================
             // Step 4b: BLUE.VerEscrow(Λ_BLUE, pk_Λ2, C_y2, Z_2) = 1
             // ============================================================
-            // （忽略 ZKVerifyS2 验证）
-            rust::ppb::verify_escrow(&lambda.lambda_blue, &pk.pk2, c_y2, &z.z2)
+            if !rust::ppb::verify_escrow(&lambda.lambda_blue, &pk.pk2, c_y2, &z.z2)
                 .unwrap_or(false)
+            {
+                return false;
+            }
+
+            // ============================================================
+            // Step 4c: ZKVerifyS2((M', σ'_y, pk_SPS, C_y2, inv), π_y) = 1
+            // ============================================================
+            let Some(pi_y) = z.pi_y.as_ref() else {
+                return false;
+            };
+            s2::verify_s2(lambda, pk_sps, &z1_prime.msg, &z1_prime.sig, c_y2, pi_y)
         }
         // ============================================================
         // Step 7: pk_Λ1 = ⊥（ℓ ≤ t 的情况）
         // ============================================================
         (None, _) => {
+            if z.pi_y.is_some() || z.z1_prime.is_some() {
+                return false;
+            }
             // ============================================================
             // Step 7: BLUE.VerEscrow(Λ_BLUE, pk_Λ2, C_y2, Z_2) = 1
             // ============================================================
@@ -127,7 +142,7 @@ mod tests {
 
         // 生成完整的 Escrow 流程
         let y = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -198,10 +213,7 @@ mod tests {
     // ================================================================
     // 测试 3: 篡改 C_y2 后验证应失败
     // ================================================================
-    // 注意：verify_poks2 当前为 stub（直接返回 true），
-    // 等 ppb 实现完整验证逻辑后取消 ignore。
     #[test]
-    #[ignore]
     fn test_escrow_verify_tampered_cy2_fails() {
         let lambda = test_lambda();
 
@@ -211,7 +223,7 @@ mod tests {
         let ((pk, sk), _c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
         let y = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -234,6 +246,42 @@ mod tests {
         assert!(!escrow_verify(&lambda, &pk, &tampered_c_y2, &z), "Escrow verify should fail for tampered C_y2");
     }
 
+    #[test]
+    fn test_escrow_verify_missing_s2_proof_fails() {
+        let lambda = test_lambda();
+
+        let x: Vec<BigUint> = (1..=4).map(|i| BigUint::from(i as u32)).collect();
+        let r_x = vec![BigUint::from(10u32), BigUint::from(20u32)];
+        let s = vec![BigUint::from(1u32), BigUint::from(2u32)];
+        let ((pk, sk), _c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
+
+        let y = rust::HecEvalInput {
+            y_id: BigUint::from(4u32),
+            y_at: BigUint::from(7u32),
+        };
+        let r_y1 = BigUint::from(41u32);
+        let r_y2 = BigUint::from(67u32);
+        let r_star_y1 = BigUint::from(53u32);
+
+        let escrow1_out = crate::escrow1::escrow1(&lambda, &pk, &y, &r_y1, &r_star_y1);
+        let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
+        let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
+        let z1 = escrow1_out.z1.as_ref().unwrap();
+
+        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
+
+        let mut z =
+            crate::escrow2::escrow2(&lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1, sigma_y)
+                .expect("Escrow2 should succeed");
+        z.pi_y = None;
+
+        assert!(
+            !escrow_verify(&lambda, &pk, &z.c_y2, &z),
+            "Escrow verify should fail when π_y is missing"
+        );
+    }
+
     // ================================================================
     // 测试 4: Escrow Update 后验证应通过（分支 1：完全更新）
     // ================================================================
@@ -248,7 +296,7 @@ mod tests {
         let ((pk, sk), c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
         let y = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(16u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);
@@ -309,7 +357,7 @@ mod tests {
         let ((pk, sk), c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
         let y = rust::HecEvalInput {
-            y_id: BigUint::from(3u32),
+            y_id: BigUint::from(4u32),
             y_at: BigUint::from(7u32),
         };
         let r_y1 = BigUint::from(41u32);

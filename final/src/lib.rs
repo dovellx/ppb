@@ -9,6 +9,7 @@ pub mod judgement;
 pub mod keygen;
 pub mod keyupdate;
 pub mod setup;
+pub mod s2;
 pub mod types;
 pub mod verpk;
 

@@ -621,44 +621,7 @@ fn nonzero_challenge_mod_n(raw: BigUint, n: &BigUint) -> BigUint {
 /// 派生时先哈希到 `Z*_{N^2}`，再取 `candidate^N` 并规约为绝对值代表元，
 /// 使基落入与现有 DF/CS 参数一致的 `|QR_{N^2}|` 语义。
 fn derive_s1_bases(params: &PpbParams, len: usize) -> CryptoResult<Vec<BigUint>> {
-    if params.cpar.n2.is_zero() {
-        return Err(CryptoError::InvalidInput("n^2 must be non-zero"));
-    }
-
-    let mut bases = Vec::with_capacity(len);
-    let domain = BigUint::from(0x5331u32); // "S1" 域分离常量。
-    for i in 0..len {
-        let idx_u64 = u64::try_from(i + 1).map_err(|_| CryptoError::InvalidInput("S1 base index too large"))?;
-        let idx = BigUint::from(idx_u64);
-        let mut counter = BigUint::zero();
-        loop {
-            let candidate = fiat_shamir_challenge_biguints(&[
-                &domain,
-                &params.cpar.n,
-                &params.cpar.n2,
-                &params.cpar.g,
-                &params.cpar.h,
-                &idx,
-                &counter,
-            ]) % &params.cpar.n2;
-            if gcd(candidate.clone(), params.cpar.n2.clone()) != BigUint::one() {
-                counter += BigUint::one();
-                continue;
-            }
-
-            let base_raw = candidate.modpow(&params.cpar.n, &params.cpar.n2);
-            let base = abs_qr_rep(&base_raw, &params.cpar.n2);
-
-            // 排除平凡基 0/1，避免某个向量分量在承诺中完全失去约束。
-            if base > BigUint::one() {
-                bases.push(base);
-                break;
-            }
-            counter += BigUint::one();
-        }
-    }
-
-    Ok(bases)
+    crate::df::derive_df_vector_bases(&params.cpar, len)
 }
 
 /// 计算 S1 向量承诺：
@@ -670,15 +633,7 @@ fn commit_s1_vector_with_bases(
     values: &[BigUint],
     opening: &BigUint,
 ) -> CryptoResult<BigUint> {
-    if bases.len() != values.len() {
-        return Err(CryptoError::InvalidInput("S1 bases/value length mismatch"));
-    }
-
-    let mut acc = params.cpar.h.modpow(opening, &params.cpar.n2);
-    for (base, value) in bases.iter().zip(values.iter()) {
-        acc = (acc * base.modpow(value, &params.cpar.n2)) % &params.cpar.n2;
-    }
-    Ok(acc)
+    Ok(crate::df::commit_df_vector_with_bases(&params.cpar, bases, values, opening)?.c)
 }
 
 /// 使用确定性派生的 S1 基计算向量承诺。

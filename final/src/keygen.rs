@@ -17,6 +17,7 @@ use mercurial_signature::SecretKey as MsSecretKey;
 
 use crate::commit::{self, PolyCommitment};
 use crate::setup::Lambda;
+use crate::types::{split_watchlist, WatchlistCommitments};
 
 /// 公钥 pk_Λ = (pk_Λ1, pk_Λ2, pk_SPS)。
 ///
@@ -73,23 +74,15 @@ pub fn keygen(
 
     // Step 3: ℓ = |x|, α = ℓ mod t
     let l = x.len();
-    let alpha = l % t;
+    let split = split_watchlist(x, t).expect("watchlist split failed");
 
-    if l > t {
+    if let Some(x1) = split.prefix {
         // ============================================================
         // Step 4-10: ℓ > t 的情况 —— 将 x 分为两部分
         // ============================================================
 
-        // Step 5-10: 确定分割点，将 x 分为 x1 和 x2
-        let split = if alpha != 0 {
-            // Step 5-7: α ≠ 0 时，x1 = (x_1,...,x_{ℓ-α}), x2 = (x_{ℓ-α+1},...,x_ℓ)
-            l - alpha
-        } else {
-            // Step 8-10: α = 0 时，x1 = (x_1,...,x_{ℓ-t}), x2 = (x_{ℓ-t+1},...,x_ℓ)
-            l - t
-        };
-        let x1 = &x[..split];
-        let x2 = &x[split..];
+        // Step 5-10: 统一通过 split_watchlist 确定 x1 和 x2。
+        let x2 = split.remainder;
 
         // ============================================================
         // Step 11: (pk_Λ1, sk_Λ1) ← BLUE.KeyGen(Λ_BLUE, x1, r_x1; s1)
@@ -122,7 +115,11 @@ pub fn keygen(
         let cx2 = commit::commit(lambda, x2, r_x2, s2);
 
         // Step 22: C_x = (C_x1, C_x2)
-        let c_x = vec![Some(cx1), Some(cx2)];
+        let c_x = WatchlistCommitments {
+            prefix: Some(cx1),
+            remainder: cx2,
+        }
+        .into_legacy_vec();
 
         // Step 23: pk_Λ = (pk_Λ1, pk_Λ2, pk_SPS)
         let pk = PublicKey {
@@ -153,8 +150,9 @@ pub fn keygen(
         // ============================================================
         // Step 20: (pk_Λ2, sk_Λ2) ← BLUE.KeyGen(Λ_BLUE, x, r_x2; s2)
         // ============================================================
-        let fk2 = HecFunctionKey { n: l, k: 1 };
-        let (pk2, sk2) = keygen_ppb(&lambda.lambda_blue, &fk2, x, r_x2, s2)
+        let x2 = split.remainder;
+        let fk2 = HecFunctionKey { n: x2.len(), k: 1 };
+        let (pk2, sk2) = keygen_ppb(&lambda.lambda_blue, &fk2, x2, r_x2, s2)
             .expect("BLUE.KeyGen for x failed");
 
         // ============================================================
@@ -162,10 +160,14 @@ pub fn keygen(
         //   注意：算法中写的是 x2，但此处 x2 = x（整个列表），
         //   因为当 ℓ ≤ t 时不分割列表。
         // ============================================================
-        let cx2 = commit::commit(lambda, x, r_x2, s2);
+        let cx2 = commit::commit(lambda, x2, r_x2, s2);
 
         // Step 22: C_x = (C_x1, C_x2) = (⊥, C_x2)
-        let c_x = vec![None, Some(cx2)];
+        let c_x = WatchlistCommitments {
+            prefix: None,
+            remainder: cx2,
+        }
+        .into_legacy_vec();
 
         // Step 23: pk_Λ = (pk_Λ1, pk_Λ2, pk_SPS)
         let pk = PublicKey {

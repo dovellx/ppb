@@ -4,15 +4,11 @@
 //! 计算多项式 P = s * ∏(x - x_i) 的系数展开，
 //! 然后对系数向量 (a_0, a_1, ..., a_{|x|}) 计算承诺值 C_x。
 //!
-//! 承诺使用 DF 参数中的固定基 g：
-//!   C = g^{a_0} * g^{a_1} * ... * g^{a_k} * h^{r_x} mod n^2
-//!     = g^{sum(a_i)} * h^{r_x} mod n^2
-//!
-//! 暂时忽略 crs1, crs2。
+//! 承诺使用 DF/S1 兼容的确定性多基：
+//!   C = H^{r_x} * Π_i G_i^{a_i} mod n^2。
+//! 这些 G_i 由公共参数和下标派生，因此 VerPK 可以重算同一组基。
 
 use num_bigint::BigUint;
-
-use rust::expand_roots_to_coefficients_mod_n;
 
 use crate::setup::Lambda;
 
@@ -49,8 +45,8 @@ pub struct PolyCommitment {
 ///     n 为模数，在 Z_n 上展开多项式并返回系数向量。
 ///
 /// Step 3: C_x <- COM.Com(cpar, (a_0, ..., a_{|x|}); r_x)
-///   - 使用参数中的固定基 g 计算承诺：
-///     C = g^{sum(a_i)} * h^{r_x} mod n^2。
+///   - 使用确定性多基计算承诺：
+///     C = H^{r_x} * Π_i G_i^{a_i} mod n^2。
 ///
 /// Step 4: 返回承诺值 C_x。
 pub fn commit(
@@ -60,38 +56,14 @@ pub fn commit(
     s: &BigUint,
 ) -> PolyCommitment {
     let cpar = &lambda.cpar;
-    let n = &cpar.n;
 
-    // Step 2: P <- s * ∏(x - x_i)，展开为系数向量
-    let coeffs = expand_roots_to_coefficients_mod_n(x, s, n)
-        .expect("expand_roots_to_coefficients_mod_n failed");
-
-    // Step 3: 使用参数中的固定基 g 计算承诺
-    commit_with_bases(cpar, &coeffs, r_x)
-}
-
-/// 内部辅助：使用参数中的固定基 g 计算承诺。
-///
-/// 公式：C = g^{sum(coeffs)} * h^{r_x} mod n^2
-fn commit_with_bases(
-    cpar: &rust::DfParams,
-    coeffs: &[BigUint],
-    r_x: &BigUint,
-) -> PolyCommitment {
-    let n2 = &cpar.n2;
-
-    // sum(a_i)
-    let coeff_sum: BigUint = coeffs.iter().fold(BigUint::from(0u32), |acc, ai| acc + ai);
-
-    // C = g^{sum(a_i)} * h^{r_x} mod n^2
-    let g_sum = cpar.g.modpow(&coeff_sum, n2);
-    let h_rx = cpar.h.modpow(r_x, n2);
-    let c_x = (&g_sum * &h_rx) % n2;
+    let (commitment, coeffs) =
+        rust::commit_df_multibase(cpar, x, r_x, s).expect("commit_df_multibase failed");
 
     PolyCommitment {
-        c: c_x,
-        coeffs: coeffs.to_vec(),
-        r_x: r_x.clone(),
+        c: commitment.c,
+        coeffs,
+        r_x: commitment.r,
     }
 }
 
@@ -274,50 +246,48 @@ mod tests {
     }
 
     // ================================================================
-    // 测试 5: 使用固定基 g 验证承诺公式
+    // 测试 5: 多基向量承诺公式
     // ================================================================
 
-    /// 验证 C = g^{sum(a_i)} * h^{r_x} mod n^2。
+    /// final 层的 Commit 应直接匹配 ppb 基础库中的多基承诺。
     #[test]
-    fn test_commitment_formula_with_fixed_base() {
+    fn test_commitment_matches_core_multibase() {
         let lambda = test_lambda();
         let cpar = &lambda.cpar;
-        let n = &cpar.n;
-        let n2 = &cpar.n2;
 
         let x = vec![BigUint::from(2u32), BigUint::from(3u32)];
         let s = BigUint::from(1u32);
         let r_x = BigUint::from(7u32);
 
         let pc = commit(&lambda, &x, &r_x, &s);
+        let (expected, expected_coeffs) =
+            rust::commit_df_multibase(cpar, &x, &r_x, &s).expect("multibase commit should succeed");
 
-        // 手动计算：coeffs = [6, n-5, 1], sum = 6 + (n-5) + 1 = n + 2
-        let coeff_sum: BigUint = pc.coeffs.iter().fold(BigUint::from(0u32), |acc, a| acc + a);
-        let g_sum = cpar.g.modpow(&coeff_sum, n2);
-        let h_rx = cpar.h.modpow(&r_x, n2);
-        let expected_c = (&g_sum * &h_rx) % n2;
-
-        assert_eq!(pc.c, expected_c, "commitment should match manual computation");
+        assert_eq!(pc.coeffs, expected_coeffs);
+        assert_eq!(pc.c, expected.c, "commitment should match core multibase computation");
     }
 
-    /// 验证 r_x = 0 时，C = g^{sum(a_i)}（无 h 分量）。
+    /// 旧的 g^{sum(a_i)} 方案会让这两个不同系数向量在相同 r 下碰撞。
     #[test]
-    fn test_commitment_zero_opening() {
+    fn test_same_coefficient_sum_does_not_collide() {
         let lambda = test_lambda();
-        let cpar = &lambda.cpar;
-        let n2 = &cpar.n2;
+        let s = BigUint::from(1u32);
+        let r_x = BigUint::from(9u32);
 
-        let x = vec![BigUint::from(5u32)];
-        let s = BigUint::from(2u32);
-        let r_x = BigUint::from(0u32);
+        let pc1 = commit(&lambda, &[BigUint::from(2u32)], &r_x, &s);
+        let pc2 = commit(
+            &lambda,
+            &[BigUint::from(0u32), BigUint::from(2u32)],
+            &r_x,
+            &s,
+        );
 
-        let pc = commit(&lambda, &x, &r_x, &s);
+        let sum1: BigUint = pc1.coeffs.iter().fold(BigUint::from(0u32), |acc, a| acc + a);
+        let sum2: BigUint = pc2.coeffs.iter().fold(BigUint::from(0u32), |acc, a| acc + a);
 
-        // h^0 = 1，所以 C = g^{sum(a_i)}
-        let coeff_sum: BigUint = pc.coeffs.iter().fold(BigUint::from(0u32), |acc, a| acc + a);
-        let expected = cpar.g.modpow(&coeff_sum, n2);
-
-        assert_eq!(pc.c, expected, "with r_x=0, commitment should equal g^(sum(a_i))");
+        assert_eq!(sum1, sum2, "test inputs should collide under the old sum-based formula");
+        assert_ne!(pc1.coeffs, pc2.coeffs);
+        assert_ne!(pc1.c, pc2.c, "multibase commitment must bind coefficient positions");
     }
 
     // ================================================================

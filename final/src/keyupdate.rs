@@ -7,9 +7,9 @@
 //! 输出：新公私钥 (pk'_Λ, sk'_Λ)，以及新承诺 C'_x。
 //!
 //! 核心逻辑：
-//! - 当 Δ + α > t 时，完全重新生成（与 KeyGen 相同逻辑）；
-//! - 当 Δ + α ≤ t 时，部分更新——复用旧的前半部分密钥和承诺，
-//!   仅对 x' 的后 α 个元素重新生成密钥对和承诺。
+//! - 当名单被替换或 Δ + α > t 时，完全重新生成（与 KeyGen 相同逻辑）；
+//! - 当名单为 append 且 Δ + α ≤ t 时，部分更新——复用旧的前半部分密钥和承诺，
+//!   对“旧余量 + 新追加元素”重新生成密钥对和承诺。
 
 use num_bigint::BigUint;
 
@@ -18,6 +18,7 @@ use rust::{keygen_ppb, HecFunctionKey};
 use crate::commit::{self, PolyCommitment};
 use crate::keygen::{PublicKey, SecretKey};
 use crate::setup::Lambda;
+use crate::types::{plan_watchlist_update, UpdateKind, WatchlistCommitments};
 
 /// Algorithm 4: KeyUpdate(Λ, x, r_x, s, pk_Λ, sk_Λ, C_x, x', r'_x, s')
 ///            -> (pk'_Λ, sk'_Λ), C'_x
@@ -59,130 +60,76 @@ pub fn key_update(
 
     // Step 2: (r_x1, r_x2) = r_x; (s1, s2) = s
     // Step 3: (r'_x1, r'_x2) = r'_x; (s'_1, s'_2) = s'
-    let r_x2 = &r_x[1];
-    let s2 = &s[1];
-    let r_x1_prime = &r_x_prime[0];
     let r_x2_prime = &r_x_prime[1];
-    let s1_prime = &s_prime[0];
     let s2_prime = &s_prime[1];
 
     // Step 4: (pk_Λ1, pk_Λ2, pk_SPS) = pk_Λ
     // Step 5: (sk_Λ1, sk_Λ2, sk_SPS) = sk_Λ
     // （通过参数 pk, sk 直接访问）
 
-    // Step 6: ℓ' = |x'|, ℓ = |x|, Δ = |x'| - |x|
-    let l_prime = x_prime.len();
-    let l = x.len();
-    let delta = l_prime as isize - l as isize;
-
-    // Step 7: α = ℓ mod t, α' = ℓ' mod t
-    let mut alpha = l % t;
-    let alpha_prime = l_prime % t;
-
-    // Step 8-9: if ℓ > t and α = 0 then α = t
-    if l > t && alpha == 0 {
-        alpha = t;
-    }
+    // Step 6-10: 统一由 WatchlistUpdatePlan 决定是否更新前缀。
+    let update_plan = plan_watchlist_update(x, x_prime, t).expect("watchlist update plan failed");
 
     // Step 10: 判断走完全重新生成还是部分更新
-    if (delta as usize) + alpha > t {
-        // ============================================================
-        // Step 10-21: Δ + α > t —— 完全重新生成
-        // ============================================================
+    match update_plan.kind {
+        UpdateKind::FullRegeneration => {
+            // ============================================================
+            // Step 10-21: Δ + α > t —— 完全重新生成
+            // ============================================================
 
-        // Step 11-16: 确定分割点，将 x' 分为 x'_1 和 x'_2
-        let split = if alpha_prime != 0 {
-            // Step 11-13: α' ≠ 0
-            l_prime - alpha_prime
-        } else {
-            // Step 14-16: α' = 0
-            l_prime - t
-        };
-        let x1_prime = &x_prime[..split];
-        let x2_prime = &x_prime[split..];
+            // 完全重生成与 KeyGen 语义相同；委托给 KeyGen 避免重复拆分逻辑。
+            crate::keygen::keygen(lambda, x_prime, r_x_prime, s_prime)
+        }
+        UpdateKind::ReusePrefix => {
+            // ============================================================
+            // Step 22-29: Δ + α ≤ t —— 部分更新，复用旧的前半部分
+            // ============================================================
 
-        // Step 17: (pk'_Λ1, sk'_Λ1) ← BLUE.KeyGen(Λ_BLUE, x'_1, r'_x1; s'_1)
-        let fk1 = HecFunctionKey { n: x1_prime.len(), k: 1 };
-        let (pk1_prime, sk1_prime) = keygen_ppb(&lambda.lambda_blue, &fk1, x1_prime, r_x1_prime, s1_prime)
-            .expect("BLUE.KeyGen for x'_1 failed");
+            // Step 23: r'_x1 = r_x1; s'_1 = s1（保留旧值，仅用于语义说明）
+            // Step 24: (pk'_Λ1, sk'_Λ1) = (pk_Λ1, sk_Λ1)
+            // Step 25: (pk'_SPS, sk'_SPS) = (pk_SPS, sk_SPS)
+            // （直接从旧密钥中 clone）
 
-        // Step 18: (pk'_Λ2, sk'_Λ2) ← BLUE.KeyGen(Λ_BLUE, x'_2, r'_x2; s'_2)
-        let fk2 = HecFunctionKey { n: x2_prime.len(), k: 1 };
-        let (pk2_prime, sk2_prime) = keygen_ppb(&lambda.lambda_blue, &fk2, x2_prime, r_x2_prime, s2_prime)
-            .expect("BLUE.KeyGen for x'_2 failed");
+            // Step 26: x'_2 = old remainder || appended elements.
+            let x2_prime = update_plan.new_remainder;
 
-        // Step 19: pk'_SPS, sk'_SPS ← SPS.KGen(pp)
-        let mut rng = ark_std::rand::rngs::OsRng;
-        let (pk_sps_prime, sk_sps_prime) = lambda.pp.key_gen(&mut rng, l_prime as u32);
+            // Step 27: (pk'_Λ2, sk'_Λ2) ← BLUE.KeyGen(Λ_BLUE, x'_2, r'_x2; s'_2)
+            let fk2 = HecFunctionKey { n: x2_prime.len(), k: 1 };
+            let (pk2_prime, sk2_prime) =
+                keygen_ppb(&lambda.lambda_blue, &fk2, x2_prime, r_x2_prime, s2_prime)
+                    .expect("BLUE.KeyGen for x'_2 failed");
 
-        // Step 20: C'_x1 = Commit(Λ, x'_1, r'_x1; s'_1)
-        let cx1_prime = commit::commit(lambda, x1_prime, r_x1_prime, s1_prime);
+            // Step 28: C'_x1 = C_x1（复用旧承诺）
+            let cx1_prime = c_x[0].clone();
 
-        // Step 21: C'_x2 = Commit(Λ, x'_2, r'_x2; s'_2)
-        let cx2_prime = commit::commit(lambda, x2_prime, r_x2_prime, s2_prime);
+            // Step 29: C'_x2 = Commit(Λ, x'_2, r'_x2; s'_2)
+            let cx2_prime = commit::commit(lambda, x2_prime, r_x2_prime, s2_prime);
 
-        // Step 30: C'_x = (C'_x1, C'_x2)
-        let c_x_prime = vec![Some(cx1_prime), Some(cx2_prime)];
+            // Step 30: C'_x = (C'_x1, C'_x2)
+            let c_x_prime = WatchlistCommitments {
+                prefix: cx1_prime,
+                remainder: cx2_prime,
+            }
+            .into_legacy_vec();
 
-        // Step 31: pk'_Λ = (pk'_Λ1, pk'_Λ2, pk'_SPS)
-        let new_pk = PublicKey {
-            pk1: Some(pk1_prime),
-            pk2: pk2_prime,
-            pk_sps: Some(pk_sps_prime),
-        };
+            // Step 31: pk'_Λ = (pk'_Λ1, pk'_Λ2, pk'_SPS)
+            let new_pk = PublicKey {
+                pk1: pk.pk1.clone(),
+                pk2: pk2_prime,
+                pk_sps: pk.pk_sps.clone(),
+            };
 
-        // Step 31: sk'_Λ = (sk'_Λ1, sk'_Λ2, sk'_SPS)
-        let new_sk = SecretKey {
-            sk1: Some(sk1_prime),
-            sk2: sk2_prime,
-            sk_sps: Some(sk_sps_prime),
-        };
+            // Step 31: sk'_Λ = (sk'_Λ1, sk'_Λ2, sk'_SPS)
+            let new_sk = SecretKey {
+                sk1: sk.sk1.clone(),
+                sk2: sk2_prime,
+                sk_sps: sk.sk_sps.clone(),
+            };
 
-        // Step 32: return (pk'_Λ, sk'_Λ), C'_x
-        ((new_pk, new_sk), c_x_prime)
-    } else {
-        // ============================================================
-        // Step 22-29: Δ + α ≤ t —— 部分更新，复用旧的前半部分
-        // ============================================================
-
-        // Step 23: r'_x1 = r_x1; s'_1 = s1（保留旧值，仅用于语义说明）
-        // Step 24: (pk'_Λ1, sk'_Λ1) = (pk_Λ1, sk_Λ1)
-        // Step 25: (pk'_SPS, sk'_SPS) = (pk_SPS, sk_SPS)
-        // （直接从旧密钥中 clone）
-
-        // Step 26: x'_2 = (x'_{ℓ'-α+1}, ..., x'_{ℓ'})
-        let x2_prime = &x_prime[l_prime - alpha..];
-
-        // Step 27: (pk'_Λ2, sk'_Λ2) ← BLUE.KeyGen(Λ_BLUE, x'_2, r'_x2; s'_2)
-        let fk2 = HecFunctionKey { n: x2_prime.len(), k: 1 };
-        let (pk2_prime, sk2_prime) = keygen_ppb(&lambda.lambda_blue, &fk2, x2_prime, r_x2_prime, s2_prime)
-            .expect("BLUE.KeyGen for x'_2 failed");
-
-        // Step 28: C'_x1 = C_x1（复用旧承诺）
-        let cx1_prime = c_x[0].clone();
-
-        // Step 29: C'_x2 = Commit(Λ, x'_2, r'_x2; s'_2)
-        let cx2_prime = commit::commit(lambda, x2_prime, r_x2_prime, s2_prime);
-
-        // Step 30: C'_x = (C'_x1, C'_x2)
-        let c_x_prime = vec![cx1_prime, Some(cx2_prime)];
-
-        // Step 31: pk'_Λ = (pk'_Λ1, pk'_Λ2, pk'_SPS)
-        let new_pk = PublicKey {
-            pk1: pk.pk1.clone(),
-            pk2: pk2_prime,
-            pk_sps: pk.pk_sps.clone(),
-        };
-
-        // Step 31: sk'_Λ = (sk'_Λ1, sk'_Λ2, sk'_SPS)
-        let new_sk = SecretKey {
-            sk1: sk.sk1.clone(),
-            sk2: sk2_prime,
-            sk_sps: sk.sk_sps.clone(),
-        };
-
-        // Step 32: return (pk'_Λ, sk'_Λ), C'_x
-        ((new_pk, new_sk), c_x_prime)
+            // Step 32: return (pk'_Λ, sk'_Λ), C'_x
+            ((new_pk, new_sk), c_x_prime)
+        }
+        UpdateKind::NoChange => ((pk.clone(), sk.clone()), c_x.to_vec()),
     }
 }
 
@@ -511,7 +458,7 @@ mod tests {
     // ================================================================
 
     /// ℓ=4, t=3, α=1; ℓ'=5, Δ=1, Δ+α=2 ≤ 3 → 部分更新。
-    /// x' = [1,2,3,4,5], x'_2 = last α=1 element = [5]。
+    /// x' = [1,2,3,4,5], x'_2 = old remainder || append = [4,5]。
     #[test]
     fn test_partial_update_x2_prime_coefficients() {
         let lambda = test_lambda();
@@ -531,11 +478,12 @@ mod tests {
             &x_prime, &r_x_prime, &s_prime,
         );
 
-        // x'_2 = [5], s'_2 = 1 → P = (x-5), coeffs = [n-5, 1]
+        // x'_2 = [4,5], s'_2 = 1 → P = (x-4)(x-5) = x^2 - 9x + 20
         let cx2 = c_x_new[1].as_ref().unwrap();
-        assert_eq!(cx2.coeffs.len(), 2);
-        assert_eq!(cx2.coeffs[1], BigUint::from(1u32));
-        assert_eq!(cx2.coeffs[0], n - BigUint::from(5u32));
+        assert_eq!(cx2.coeffs.len(), 3);
+        assert_eq!(cx2.coeffs[2], BigUint::from(1u32));
+        assert_eq!(cx2.coeffs[1], n - BigUint::from(9u32));
+        assert_eq!(cx2.coeffs[0], BigUint::from(20u32));
     }
 
     // ================================================================

@@ -1,17 +1,6 @@
-mod commit;
-mod dec;
-mod endorse;
-mod escrow1;
-mod escrow2;
-mod escrow_update;
-mod escrow_verify;
-mod judgement;
-mod keygen;
-mod keyupdate;
-mod setup;
-mod verpk;
-
 use num_bigint::BigUint;
+
+use r#final::{commit, keygen};
 
 // 使用 ppb 的 Pedersen 承诺
 use rust::setup_pedersen;
@@ -28,7 +17,7 @@ fn main() {
     println!("cpar* (Pedersen 承诺参数) 已生成");
 
     // 调用 Algorithm 2: Setup
-    let lambda = setup::setup(lambda_bits, t, cpar_star);
+    let lambda = r#final::setup::setup(lambda_bits, t, cpar_star);
 
     println!("\n=== Setup 输出 Λ ===");
     println!("pp (Mercurial Signature 公共参数): 已生成");

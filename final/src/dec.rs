@@ -181,7 +181,7 @@ mod tests {
         let ((pk, sk), _c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
         let y = rust::HecEvalInput {
-            y_id: BigUint::from(5u32),
+            y_id: BigUint::from(42u32),
             y_at: BigUint::from(10u32),
         };
         let r_y2 = BigUint::from(67u32);

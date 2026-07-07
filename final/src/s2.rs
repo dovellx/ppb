@@ -94,7 +94,8 @@ pub fn prove_s2(
         return None;
     }
 
-    let expected_c_star = rust::com_pedersen(&lambda.cpar_star, witness.y, witness.r_star_y1).ok()?;
+    let expected_c_star =
+        rust::com_pedersen(&lambda.cpar_star, witness.y, witness.r_star_y1).ok()?;
     if &expected_c_star != witness.c_star_y1 {
         return None;
     }
@@ -165,8 +166,7 @@ pub fn prove_s2(
             - pair(crs.h2 * s_sigma1_m, crs.p_hat),
         d_sigma1_2: crs.h3 * s_sigma_1,
         d_sigma1_3: commitments.c_sigma1_2 * s_m - crs.h3 * s_sigma1_m,
-        d_sigma1_4: pair(sigma1_prime * s_rho, crs.p_hat)
-            + pair(crs.h2 * s_sigma1_mu, crs.p_hat)
+        d_sigma1_4: pair(sigma1_prime * s_rho, crs.p_hat) + pair(crs.h2 * s_sigma1_mu, crs.p_hat)
             - pair(commitments.c_sigma1_1 * s_mu, crs.p_hat),
         d_sigma1_5: commitments.c_sigma1_2 * s_mu - crs.h3 * s_sigma1_mu,
         d_sigma2_1: pair(commitments.c_sigma2_1 * s_rho, crs.p_hat)
@@ -254,7 +254,14 @@ pub fn verify_s2(
     if d.d_inv != lambda.inv * z.z_mu - msg_prime[1] * c {
         return false;
     }
-    if !verify_df_y2(&lambda.cpar, &d.d_y2, c_y2, &z.z_y, &z.z_ry2, &proof.challenge) {
+    if !verify_df_y2(
+        &lambda.cpar,
+        &d.d_y2,
+        c_y2,
+        &z.z_y,
+        &z.z_ry2,
+        &proof.challenge,
+    ) {
         return false;
     }
     if d.d_y1
@@ -266,8 +273,7 @@ pub fn verify_s2(
         return false;
     }
     if d.d_cy_1
-        != -pair(msg_prime[0] * c, crs.p_hat)
-            + pair(cc.c_cy_1 * z.z_mu, crs.p_hat)
+        != -pair(msg_prime[0] * c, crs.p_hat) + pair(cc.c_cy_1 * z.z_mu, crs.p_hat)
             - pair(crs.h2 * z.z_y_mu, crs.p_hat)
     {
         return false;
@@ -292,8 +298,7 @@ pub fn verify_s2(
         return false;
     }
     if d.d_sigma1_4
-        != pair(sigma1_prime * z.z_rho, crs.p_hat)
-            + pair(crs.h2 * z.z_sigma1_mu, crs.p_hat)
+        != pair(sigma1_prime * z.z_rho, crs.p_hat) + pair(crs.h2 * z.z_sigma1_mu, crs.p_hat)
             - pair(cc.c_sigma1_1 * z.z_mu, crs.p_hat)
     {
         return false;
@@ -358,7 +363,8 @@ fn verify_df_y2(
     let Some(inv_cy2) = rust::math::modinv(c_y2, &cpar.n2).ok() else {
         return false;
     };
-    let rhs = (&df_commit_parts(cpar, z_y, z_ry2) * &inv_cy2.modpow(challenge, &cpar.n2)) % &cpar.n2;
+    let rhs =
+        (&df_commit_parts(cpar, z_y, z_ry2) * &inv_cy2.modpow(challenge, &cpar.n2)) % &cpar.n2;
     lhs == &rhs
 }
 
@@ -368,8 +374,11 @@ fn blinding_bits_y(lambda: &Lambda) -> u64 {
 }
 
 fn blinding_bits_ry(lambda: &Lambda) -> u64 {
-    let b = rust::math::derive_b_bits_from_n2(&lambda.cpar.n2).unwrap_or(lambda.cpar.n.bits() as usize);
-    (b + lambda.lambda_blue.lambda_bits * 2).try_into().unwrap_or(u64::MAX)
+    let b =
+        rust::math::derive_b_bits_from_n2(&lambda.cpar.n2).unwrap_or(lambda.cpar.n.bits() as usize);
+    (b + lambda.lambda_blue.lambda_bits * 2)
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 fn challenge(

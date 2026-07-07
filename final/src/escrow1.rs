@@ -4,22 +4,23 @@
 //!       DF 承诺随机数 r_y1、Pedersen 承诺随机数 r*_y1。
 //!
 //! 输出：Z_1（BLUE.Escrow 的输出）、C_y1（DF 承诺）、
-//!       C*_y1（Pedersen 承诺）、π_1（ZK 证明，暂未实现）。
+//!       C*_y1（Pedersen 承诺）、π_1（ZK 证明）。
 //!
 //! 算法流程：
 //! 1. 解析全局参数 Λ 和公钥 pk_Λ；
 //! 2. 若 pk_Λ1 ≠ ⊥，调用 BLUE.Escrow 生成 Z_1；
 //! 3. 使用 DF 承诺方案计算 C_y1 = Com(cpar, y; r_y1)；
 //! 4. 使用 Pedersen 承诺方案计算 C*_y1 = Com*(cpar*, y; r*_y1)；
-//! 5. （暂未实现）生成 ZK 证明 π_1。
+//! 5. 生成 ZK 证明 π_1。
 
 use num_bigint::BigUint;
 
 use ark_bls12_381::G1Projective;
 
-use rust::{escrow_ppb, HecEvalInput, PpbEscrowOutput};
+use rust::{HecEvalInput, PpbEscrowOutput, escrow_ppb};
 
 use crate::keygen::PublicKey;
+use crate::s1::{self, S1Proof, S1Witness};
 use crate::s2::map_eval_input_to_scalar;
 use crate::setup::Lambda;
 
@@ -32,7 +33,7 @@ use crate::setup::Lambda;
 ///    当 pk_Λ1 = ⊥ 时为 None；
 /// 3. `c_star_y1`：Pedersen 承诺值 C*_y1 = Com*(cpar*, y; r*_y1) ∈ G1，
 ///    当 pk_Λ1 = ⊥ 时为 None；
-/// 4. `pi1`：ZK 证明 π_1（暂未实现，保留占位）。
+/// 4. `pi1`：ZK 证明 π_1，证明 C_y1 和 C*_y1 承诺同一个 y。
 pub struct Escrow1Output {
     /// Z_1 = BLUE.Escrow(Λ_BLUE, pk_Λ1, y; r_y1)。
     pub z1: Option<PpbEscrowOutput>,
@@ -40,8 +41,8 @@ pub struct Escrow1Output {
     pub c_y1: Option<BigUint>,
     /// C*_y1 = Com*(cpar*, y; r*_y1)，Pedersen 承诺椭圆曲线点。
     pub c_star_y1: Option<G1Projective>,
-    // TODO: π_1 ← ZKProveS1(...)
-    // 当前暂未实现 ZK 证明，后续接入时扩展此字段。
+    /// π_1 ← ZKProveS1((C_y1, C*_y1), (y, r_y1, r*_y1))。
+    pub pi1: Option<S1Proof>,
 }
 
 /// Algorithm 6: Escrow1(Λ, pk_Λ, y, r_y1, r*_y1) -> (Z_1, C_y1, C*_y1, π_1)
@@ -84,14 +85,9 @@ pub fn escrow1(
         //   2. 采样 r^Z 并计算 Z_hat = HECeval(hecpar, f, X, y; r^Z)；
         //   3. 计算 C_y = Com_cpar(y; r_y)；
         //   4. 构造 PoKS2 证明 π_U。
-        let z1 = escrow_ppb(
-            &lambda.lambda_blue,
-            pk1,
-            y,
-            r_y1,
-        )
-        .expect("BLUE.Escrow failed")
-        .expect("BLUE.Escrow returned ⊥ (VerPK failed)");
+        let z1 = escrow_ppb(&lambda.lambda_blue, pk1, y, r_y1)
+            .expect("BLUE.Escrow failed")
+            .expect("BLUE.Escrow returned ⊥ (VerPK failed)");
 
         // ============================================================
         // Step 6: C_y1 ← COM.Com(cpar, y; r_y1)
@@ -110,20 +106,23 @@ pub fn escrow1(
         // 使用椭圆曲线 Pedersen 承诺方案计算 C*_y1 = g1 * m_y + h1 * r*_y1。
         // 其中 g1, h1 为 cpar* 中的 BLS12-381 G1 群元素，
         // m_y 为标量消息，r*_y1 为 Pedersen 承诺的随机数。
-        let c_star_y1 = rust::com_pedersen(
-            &lambda.cpar_star,
-            &m_y,
-            r_star_y1,
-        )
-        .expect("Pedersen commitment computation failed");
+        let c_star_y1 = rust::com_pedersen(&lambda.cpar_star, &m_y, r_star_y1)
+            .expect("Pedersen commitment computation failed");
 
         // ============================================================
-        // Step 8: π_1 ← ZKProveS1(...) —— 暂未实现
+        // Step 8: π_1 ← ZKProveS1(...)
         // ============================================================
-        // TODO: 生成 ZK 证明 π_1，证明：
-        //   C_y1 = COM.Com(cpar, y; r_y1) ∧
-        //   C*_y1 = COM*.Com(cpar*, y; r*_y1)
-        // 需要后续接入 ZK 证明系统。
+        let pi1 = s1::prove_s1(
+            lambda,
+            &c_y1.c,
+            &c_star_y1,
+            S1Witness {
+                y: &m_y,
+                r_y1,
+                r_star_y1,
+            },
+        )
+        .expect("S1 proof generation failed");
 
         // ============================================================
         // Step 9: return Z_1, C_y1, C*_y1, π_1
@@ -132,6 +131,7 @@ pub fn escrow1(
             z1: Some(z1),
             c_y1: Some(c_y1.c),
             c_star_y1: Some(c_star_y1),
+            pi1: Some(pi1),
         }
     } else {
         // ============================================================
@@ -142,6 +142,7 @@ pub fn escrow1(
             z1: None,
             c_y1: None,
             c_star_y1: None,
+            pi1: None,
         }
     }
 }
@@ -158,8 +159,7 @@ mod tests {
     fn test_lambda() -> Lambda {
         let lambda_bits = 64;
         let t = 3;
-        let cpar_star = rust::setup_pedersen(lambda_bits)
-            .expect("setup_pedersen should succeed");
+        let cpar_star = rust::setup_pedersen(lambda_bits).expect("setup_pedersen should succeed");
         crate::setup::setup(lambda_bits, t, cpar_star)
     }
 
@@ -189,7 +189,20 @@ mod tests {
         // pk_Λ1 存在时，所有输出应为 Some
         assert!(output.z1.is_some(), "Z_1 should exist when pk_Λ1 ≠ ⊥");
         assert!(output.c_y1.is_some(), "C_y1 should exist when pk_Λ1 ≠ ⊥");
-        assert!(output.c_star_y1.is_some(), "C*_y1 should exist when pk_Λ1 ≠ ⊥");
+        assert!(
+            output.c_star_y1.is_some(),
+            "C*_y1 should exist when pk_Λ1 ≠ ⊥"
+        );
+        assert!(output.pi1.is_some(), "π_1 should exist when pk_Λ1 ≠ ⊥");
+        assert!(
+            crate::s1::verify_s1(
+                &lambda,
+                output.c_y1.as_ref().unwrap(),
+                output.c_star_y1.as_ref().unwrap(),
+                output.pi1.as_ref().unwrap(),
+            ),
+            "π_1 should verify for matching commitments"
+        );
     }
 
     // ================================================================
@@ -218,7 +231,11 @@ mod tests {
         // pk_Λ1 为 None 时，所有输出应为 None
         assert!(output.z1.is_none(), "Z_1 should be ⊥ when pk_Λ1 = ⊥");
         assert!(output.c_y1.is_none(), "C_y1 should be ⊥ when pk_Λ1 = ⊥");
-        assert!(output.c_star_y1.is_none(), "C*_y1 should be ⊥ when pk_Λ1 = ⊥");
+        assert!(
+            output.c_star_y1.is_none(),
+            "C*_y1 should be ⊥ when pk_Λ1 = ⊥"
+        );
+        assert!(output.pi1.is_none(), "π_1 should be ⊥ when pk_Λ1 = ⊥");
     }
 
     // ================================================================
@@ -276,9 +293,7 @@ mod tests {
         // 手动计算：m_y = (3 + 7) mod n = 10
         // C_y1 = g^{10} * h^{41} mod n^2
         let m_y = (BigUint::from(3u32) + BigUint::from(7u32)) % n;
-        let expected = (&lambda.cpar.g.modpow(&m_y, n2)
-            * &lambda.cpar.h.modpow(&r_y1, n2))
-            % n2;
+        let expected = (&lambda.cpar.g.modpow(&m_y, n2) * &lambda.cpar.h.modpow(&r_y1, n2)) % n2;
 
         assert_eq!(output.c_y1.unwrap(), expected);
     }
@@ -341,6 +356,9 @@ mod tests {
         let output = escrow1(&lambda, &pk, &y, &r_y1, &r_star_y1);
 
         let c_star = output.c_star_y1.unwrap();
-        assert!(!c_star.is_zero(), "C*_y1 should not be the identity element");
+        assert!(
+            !c_star.is_zero(),
+            "C*_y1 should not be the identity element"
+        );
     }
 }

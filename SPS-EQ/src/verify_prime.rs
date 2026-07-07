@@ -1,4 +1,4 @@
-use ark_ec::{pairing::Pairing, PrimeGroup};
+use ark_ec::{PrimeGroup, pairing::Pairing};
 use ark_ff::{Field, UniformRand, Zero};
 use ark_std::rand::RngCore;
 
@@ -10,19 +10,18 @@ impl<G: Pairing> PublicKeyprime<G> {
         if msg.len() > self.capacity {
             panic!("The message is too long.");
         }
-        
-        let lhs = G::multi_pairing( self.points.iter(),msg.iter());
-        let rhs = G::pairing(&sig.y,&sig.z);
+
+        let lhs = G::multi_pairing(self.points.iter(), msg.iter());
+        let rhs = G::pairing(&sig.y, &sig.z);
         if lhs != rhs {
             return false;
         }
-        
+
         let lhs = G::pairing(&sig.y, &G::G2::generator());
         let rhs = G::pairing(&G::G1::generator(), &sig.yp);
         if lhs != rhs {
             return false;
-        }
-        else {
+        } else {
             return true;
         }
     }
@@ -36,8 +35,8 @@ impl<G: Pairing> PublicKeyprime<G> {
                 msg.len()
             );
         }
-        let lhs = G::multi_pairing( self.points.iter().take(half_capacity),msg.iter());
-        let rhs = G::pairing( &sig.y,&sig.z,);
+        let lhs = G::multi_pairing(self.points.iter().take(half_capacity), msg.iter());
+        let rhs = G::pairing(&sig.y, &sig.z);
         if lhs != rhs {
             return false;
         }
@@ -49,26 +48,13 @@ impl<G: Pairing> PublicKeyprime<G> {
 }
 
 impl<G: Pairing> Signatureprime<G> {
-    pub fn chg_rep<R: RngCore>(&self, msg: &Vec<G::G2>, pk: &PublicKeyprime<G>, mu: G::ScalarField, rng: &mut R) -> (Signatureprime<G>, Vec<G::G2>) {
-        let mut psi = G::ScalarField::rand(rng);
-        while psi.is_zero() {
-            psi = G::ScalarField::rand(rng);
-        }
-        let psi_inv = psi.inverse().expect("Cannot be zero");
-
-        let z = self.z * (psi * mu);
-        let yp = self.yp * psi_inv;
-        let y = self.y * psi_inv;
-        
-        let msg = msg
-            .iter()
-            .map(|m| *m * mu)
-            .collect();
-
-        (Signatureprime { z, yp, y }, msg)
-    }
-
-    pub fn chg_rep_half<R: RngCore>(&self, msg: &Vec<G::G2>, pk: &PublicKeyprime<G>, mu: G::ScalarField, rng: &mut R) -> (Signatureprime<G>, Vec<G::G2>) {
+    pub fn chg_rep<R: RngCore>(
+        &self,
+        msg: &Vec<G::G2>,
+        pk: &PublicKeyprime<G>,
+        mu: G::ScalarField,
+        rng: &mut R,
+    ) -> (Signatureprime<G>, Vec<G::G2>) {
         let mut psi = G::ScalarField::rand(rng);
         while psi.is_zero() {
             psi = G::ScalarField::rand(rng);
@@ -79,15 +65,40 @@ impl<G: Pairing> Signatureprime<G> {
         let yp = self.yp * psi_inv;
         let y = self.y * psi_inv;
 
-        let msg = msg
-            .iter()
-            .map(|m| *m * mu)
-            .collect();
+        let msg = msg.iter().map(|m| *m * mu).collect();
 
         (Signatureprime { z, yp, y }, msg)
     }
 
-    pub fn convertsig<R: RngCore>(&self, msg: &Vec<G::G2>, pk: &PublicKeyprime<G>, rho: G::ScalarField, rng: &mut R) ->Signatureprime<G> {
+    pub fn chg_rep_half<R: RngCore>(
+        &self,
+        msg: &Vec<G::G2>,
+        pk: &PublicKeyprime<G>,
+        mu: G::ScalarField,
+        rng: &mut R,
+    ) -> (Signatureprime<G>, Vec<G::G2>) {
+        let mut psi = G::ScalarField::rand(rng);
+        while psi.is_zero() {
+            psi = G::ScalarField::rand(rng);
+        }
+        let psi_inv = psi.inverse().expect("Cannot be zero");
+
+        let z = self.z * (psi * mu);
+        let yp = self.yp * psi_inv;
+        let y = self.y * psi_inv;
+
+        let msg = msg.iter().map(|m| *m * mu).collect();
+
+        (Signatureprime { z, yp, y }, msg)
+    }
+
+    pub fn convertsig<R: RngCore>(
+        &self,
+        msg: &Vec<G::G2>,
+        pk: &PublicKeyprime<G>,
+        rho: G::ScalarField,
+        rng: &mut R,
+    ) -> Signatureprime<G> {
         let mut psi = G::ScalarField::rand(rng);
         while psi.is_zero() {
             psi = G::ScalarField::rand(rng);
@@ -102,7 +113,7 @@ impl<G: Pairing> Signatureprime<G> {
 
 #[cfg(test)]
 mod tests {
-    use crate::sign_prime::{SecretKeyprime, PublicKeyprime, keygen};
+    use crate::sign_prime::{PublicKeyprime, SecretKeyprime, keygen};
 
     use ark_bls12_381;
     use ark_ff::UniformRand;
@@ -111,7 +122,10 @@ mod tests {
     fn sign_correctness() {
         let capacity = 4;
         let mut rng = ark_std::test_rng();
-        let (sk, pk): (SecretKeyprime<ark_bls12_381::Bls12_381>, PublicKeyprime<ark_bls12_381::Bls12_381>) = keygen(capacity, &mut rng);
+        let (sk, pk): (
+            SecretKeyprime<ark_bls12_381::Bls12_381>,
+            PublicKeyprime<ark_bls12_381::Bls12_381>,
+        ) = keygen(capacity, &mut rng);
 
         let msg = vec![ark_bls12_381::G2Projective::rand(&mut rng); 4];
         let msg_half = vec![ark_bls12_381::G2Projective::rand(&mut rng); 2];
@@ -128,7 +142,10 @@ mod tests {
     fn chg_correctness() {
         let capacity = 4;
         let mut rng = ark_std::test_rng();
-        let (sk, pk): (SecretKeyprime<ark_bls12_381::Bls12_381>, PublicKeyprime<ark_bls12_381::Bls12_381>) = keygen(capacity, &mut rng);
+        let (sk, pk): (
+            SecretKeyprime<ark_bls12_381::Bls12_381>,
+            PublicKeyprime<ark_bls12_381::Bls12_381>,
+        ) = keygen(capacity, &mut rng);
 
         let msg = vec![ark_bls12_381::G2Projective::rand(&mut rng); 4];
         let msg_half = vec![ark_bls12_381::G2Projective::rand(&mut rng); 2];

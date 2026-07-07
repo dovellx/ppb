@@ -2,16 +2,17 @@
 //!
 //! 输入：全局参数 Λ、公钥 pk_Λ、私钥 sk_Λ、
 //!       列表 X、DF 承诺 C_y1、Pedersen 承诺 C*_y1、
-//!       Escrow 输出 Z_1。
+//!       Escrow 输出 Z_1、S1 证明 π_1。
 //!
 //! 输出：σ_SPS（Mercurial Signature）、y*（解密结果，可选）。
 //!
 //! 算法流程：
 //! 1. 解析 Λ 和密钥；
 //! 2. 调用 ppb 的 VerEscrow 检验 Z_1 的正确性；
-//! 3. 若验证失败，返回 ⊥；
-//! 4. 调用 ppb 的 Dec 解密得到 y*；
-//! 5. 若 ℓ > t 且 y* = ⊥，构造消息 M = (C*_y1, inv) 并用 Mercurial Signature 签名。
+//! 3. 调用 ZKVerifyS1 检验 C_y1 与 C*_y1 承诺同一个 y；
+//! 4. 若验证失败，返回 ⊥；
+//! 5. 调用 ppb 的 Dec 解密得到 y*；
+//! 6. 若 ℓ > t 且 y* = ⊥，构造消息 M = (C*_y1, inv) 并用 Mercurial Signature 签名。
 
 use num_bigint::BigUint;
 
@@ -22,6 +23,7 @@ use rust::{HecEvalInput, PpbEscrowOutput};
 use mercurial_signature::Signature as MsSignature;
 
 use crate::keygen::{PublicKey, SecretKey};
+use crate::s1::{self, S1Proof};
 use crate::setup::Lambda;
 
 /// Algorithm 7: Endorse 的输出结果。
@@ -36,7 +38,7 @@ pub struct EndorseOutput {
     pub y_star: Option<HecEvalInput>,
 }
 
-/// Algorithm 7: Endorse(Λ, pk_Λ, sk_Λ, X, C_y1, C*_y1, Z_1) -> (σ_SPS, y*)
+/// Algorithm 7: Endorse(Λ, pk_Λ, sk_Λ, X, C_y1, C*_y1, Z_1, π_1) -> (σ_SPS, y*)
 ///
 /// 输入：
 /// 1. `lambda`：全局参数 Λ；
@@ -44,7 +46,8 @@ pub struct EndorseOutput {
 /// 3. `sk`：私钥 sk_Λ；
 /// 4. `c_y1`：DF 承诺 C_y1；
 /// 5. `c_star_y1`：Pedersen 承诺 C*_y1；
-/// 6. `z1`：Escrow1 输出 Z_1。
+/// 6. `z1`：Escrow1 输出 Z_1；
+/// 7. `pi1`：证明 C_y1 和 C*_y1 承诺同一个 y 的 S1 证明。
 ///
 /// 输出：(σ_SPS, y*)。
 pub fn endorse(
@@ -54,6 +57,7 @@ pub fn endorse(
     c_y1: &BigUint,
     c_star_y1: &G1Projective,
     z1: &PpbEscrowOutput,
+    pi1: &S1Proof,
 ) -> EndorseOutput {
     // ============================================================
     // Step 1: (pp, cpar*, cpar, inv, Λ_BLUE, t) = Λ
@@ -99,6 +103,13 @@ pub fn endorse(
         };
     }
 
+    if !s1::verify_s1(lambda, c_y1, c_star_y1, pi1) {
+        return EndorseOutput {
+            sigma_sps: None,
+            y_star: None,
+        };
+    }
+
     // ============================================================
     // Step 5: y* ← Dec(Λ, sk_Λ1, C_y1, Z_1)
     // ============================================================
@@ -119,8 +130,8 @@ pub fn endorse(
         }
     };
 
-    let dec_result = rust::dec_ppb(&lambda.lambda_blue, sk1, c_y1, z1)
-        .expect("Dec computation failed");
+    let dec_result =
+        rust::dec_ppb(&lambda.lambda_blue, sk1, c_y1, z1).expect("Dec computation failed");
 
     if let Some(dec_out) = dec_result {
         EndorseOutput {
@@ -162,8 +173,7 @@ mod tests {
     fn test_lambda() -> Lambda {
         let lambda_bits = 64;
         let t = 3;
-        let cpar_star = rust::setup_pedersen(lambda_bits)
-            .expect("setup_pedersen should succeed");
+        let cpar_star = rust::setup_pedersen(lambda_bits).expect("setup_pedersen should succeed");
         crate::setup::setup(lambda_bits, t, cpar_star)
     }
 
@@ -193,11 +203,15 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let output = endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let output = endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
 
         assert!(output.sigma_sps.is_some(), "σ_SPS should exist when y* = ⊥");
-        assert!(output.y_star.is_none(), "y* should be None when y is not in the prefix");
+        assert!(
+            output.y_star.is_none(),
+            "y* should be None when y is not in the prefix"
+        );
     }
 
     // ================================================================
@@ -253,14 +267,53 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let output = endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let output = endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
 
         // 用 pk_SPS 验证签名
         let pk_sps = pk.pk_sps.as_ref().unwrap();
         let sigma = output.sigma_sps.as_ref().unwrap();
         let msg: Vec<G1Projective> = vec![c_star_y1.clone(), lambda.inv];
-        assert!(pk_sps.verify(&lambda.pp, &msg, sigma), "σ_SPS should verify correctly");
+        assert!(
+            pk_sps.verify(&lambda.pp, &msg, sigma),
+            "σ_SPS should verify correctly"
+        );
+    }
+
+    #[test]
+    fn test_endorse_rejects_tampered_s1_proof() {
+        let lambda = test_lambda();
+
+        let x: Vec<BigUint> = (1..=5).map(|i| BigUint::from(i as u32)).collect();
+        let r_x = vec![BigUint::from(10u32), BigUint::from(20u32)];
+        let s = vec![BigUint::from(1u32), BigUint::from(2u32)];
+        let ((pk, sk), _c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
+
+        let y = HecEvalInput {
+            y_id: BigUint::from(4u32),
+            y_at: BigUint::from(7u32),
+        };
+        let r_y1 = BigUint::from(41u32);
+        let r_star_y1 = BigUint::from(53u32);
+        let escrow1_out = crate::escrow1::escrow1(&lambda, &pk, &y, &r_y1, &r_star_y1);
+
+        let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
+        let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
+        let z1 = escrow1_out.z1.as_ref().unwrap();
+        let mut pi1 = escrow1_out.pi1.as_ref().unwrap().clone();
+        pi1.responses.z_y += BigUint::from(1u32);
+
+        let output = endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, &pi1);
+
+        assert!(
+            output.sigma_sps.is_none(),
+            "tampered π_1 must not be endorsed"
+        );
+        assert!(
+            output.y_star.is_none(),
+            "tampered π_1 should abort before Dec output"
+        );
     }
 
     // ================================================================
@@ -287,10 +340,14 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let output = endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let output = endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
 
-        assert!(output.sigma_sps.is_none(), "σ_SPS should not exist when y* is recovered");
+        assert!(
+            output.sigma_sps.is_none(),
+            "σ_SPS should not exist when y* is recovered"
+        );
         let y_star = output.y_star.as_ref().unwrap();
         let n = &lambda.cpar.n;
         assert_eq!(y_star.y_id, y.y_id % n, "y*_id should match y_id mod n");

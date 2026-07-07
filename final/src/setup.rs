@@ -7,7 +7,7 @@
 //!
 //! 输出：全局参数 Λ = (pp, cpar*, cpar, inv, Λ_BLUE, t, crs2)。
 //!
-//! 当前仍未实现 S1 的 CRS；S2 的 CRS 按 Algorithm 13/14 生成。
+//! S1 的 CRS 由 (cpar, cpar*) 承载；S2 的 CRS 按 Algorithm 13/14 生成。
 
 use ark_bls12_381::{G1Projective, G2Projective};
 use ark_ff::UniformRand;
@@ -97,14 +97,10 @@ pub struct Lambda {
 ///   - setup_ppb 内部会生成 HEC 参数和 DF 承诺参数 cpar。
 ///   - 同时从返回值中提取 cpar 供全局参数使用。
 ///
-/// Step 4-5: crs1 暂未使用；采样 S2 所需的 crs2。
+/// Step 4-5: crs1 由 cpar/cpar* 隐式给出；采样 S2 所需的 crs2。
 ///
 /// Step 6: return Λ = (pp, cpar*, cpar, inv, Λ_BLUE, t, crs2)。
-pub fn setup(
-    lambda_bits: usize,
-    t: usize,
-    cpar_star: rust::PedersenCommitmentParams,
-) -> Lambda {
+pub fn setup(lambda_bits: usize, t: usize, cpar_star: rust::PedersenCommitmentParams) -> Lambda {
     let mut rng = ark_std::rand::rngs::OsRng;
 
     // ============================================================
@@ -128,14 +124,14 @@ pub fn setup(
     //   1. 调用 setup_hec 生成 HEC 同态加密参数；
     //   2. 从 HEC 参数中派生 DF 承诺参数 cpar = (n, n^2, g, h)。
     // BLUE 内部的 S1/S2/S3 参数仍由底层占位；最终协议的 S2 CRS 在下方生成。
-    let lambda_blue = rust::setup_ppb(lambda_bits, &(), &(), &())
-        .expect("setup_ppb failed during Setup");
+    let lambda_blue =
+        rust::setup_ppb(lambda_bits, &(), &(), &()).expect("setup_ppb failed during Setup");
 
     // 从 Λ_BLUE 中提取 cpar（DF 承诺参数），作为全局参数的一部分。
     let cpar = lambda_blue.cpar.clone();
 
     // ============================================================
-    // Step 4-5: crs1 暂未使用；生成 Algorithm 13/14 的 crs2。
+    // Step 4-5: crs1 由 cpar/cpar* 隐式给出；生成 Algorithm 13/14 的 crs2。
     // ============================================================
     let crs2 = Crs2 {
         h2: random_nonzero_g1(&mut rng),

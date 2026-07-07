@@ -13,12 +13,12 @@
 
 use num_bigint::BigUint;
 
-use rust::{keygen_ppb, HecFunctionKey};
+use rust::{HecFunctionKey, keygen_ppb};
 
 use crate::commit::{self, PolyCommitment};
 use crate::keygen::{PublicKey, SecretKey};
 use crate::setup::Lambda;
-use crate::types::{plan_watchlist_update, UpdateKind, WatchlistCommitments};
+use crate::types::{UpdateKind, WatchlistCommitments, plan_watchlist_update};
 
 /// Algorithm 4: KeyUpdate(Λ, x, r_x, s, pk_Λ, sk_Λ, C_x, x', r'_x, s')
 ///            -> (pk'_Λ, sk'_Λ), C'_x
@@ -94,7 +94,10 @@ pub fn key_update(
             let x2_prime = update_plan.new_remainder;
 
             // Step 27: (pk'_Λ2, sk'_Λ2) ← BLUE.KeyGen(Λ_BLUE, x'_2, r'_x2; s'_2)
-            let fk2 = HecFunctionKey { n: x2_prime.len(), k: 1 };
+            let fk2 = HecFunctionKey {
+                n: x2_prime.len(),
+                k: 1,
+            };
             let (pk2_prime, sk2_prime) =
                 keygen_ppb(&lambda.lambda_blue, &fk2, x2_prime, r_x2_prime, s2_prime)
                     .expect("BLUE.KeyGen for x'_2 failed");
@@ -145,8 +148,7 @@ mod tests {
     fn test_lambda() -> Lambda {
         let lambda_bits = 64;
         let t = 3;
-        let cpar_star = rust::setup_pedersen(lambda_bits)
-            .expect("setup_pedersen should succeed");
+        let cpar_star = rust::setup_pedersen(lambda_bits).expect("setup_pedersen should succeed");
         crate::setup::setup(lambda_bits, t, cpar_star)
     }
 
@@ -170,15 +172,20 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let ((pk_new, sk_new), c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // 完全重新生成：所有字段应存在
         assert!(pk_new.pk1.is_some(), "pk'1 should exist after full regen");
-        assert!(pk_new.pk_sps.is_some(), "pk'_SPS should exist after full regen");
+        assert!(
+            pk_new.pk_sps.is_some(),
+            "pk'_SPS should exist after full regen"
+        );
         assert!(sk_new.sk1.is_some(), "sk'1 should exist after full regen");
-        assert!(sk_new.sk_sps.is_some(), "sk'_SPS should exist after full regen");
+        assert!(
+            sk_new.sk_sps.is_some(),
+            "sk'_SPS should exist after full regen"
+        );
         assert!(c_x_new[0].is_some(), "C'_x1 should exist after full regen");
         assert!(c_x_new[1].is_some(), "C'_x2 should exist after full regen");
     }
@@ -198,8 +205,7 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let ((pk_new, sk_new), c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         assert!(pk_new.pk1.is_some());
@@ -236,15 +242,20 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let ((pk_new, sk_new), c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // 部分更新：前半部分应复用旧值
         assert!(pk_new.pk1.is_some(), "pk'1 should exist (reused from old)");
-        assert!(pk_new.pk_sps.is_some(), "pk'_SPS should exist (reused from old)");
+        assert!(
+            pk_new.pk_sps.is_some(),
+            "pk'_SPS should exist (reused from old)"
+        );
         assert!(sk_new.sk1.is_some(), "sk'1 should exist (reused from old)");
-        assert!(sk_new.sk_sps.is_some(), "sk'_SPS should exist (reused from old)");
+        assert!(
+            sk_new.sk_sps.is_some(),
+            "sk'_SPS should exist (reused from old)"
+        );
         assert!(c_x_new[0].is_some(), "C'_x1 should exist (reused from old)");
         assert!(c_x_new[1].is_some(), "C'_x2 should be regenerated");
     }
@@ -264,15 +275,17 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let (_, c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // C'_x1 应与旧 C_x1 完全相同
         let old_cx1 = c_x[0].as_ref().unwrap();
         let new_cx1 = c_x_new[0].as_ref().unwrap();
         assert_eq!(old_cx1.c, new_cx1.c, "C'_x1 should equal old C_x1");
-        assert_eq!(old_cx1.coeffs, new_cx1.coeffs, "C'_x1 coeffs should equal old C_x1");
+        assert_eq!(
+            old_cx1.coeffs, new_cx1.coeffs,
+            "C'_x1 coeffs should equal old C_x1"
+        );
     }
 
     /// 部分更新时，C'_x2 应与旧 C_x2 不同（因为 x'_2 不同）。
@@ -290,8 +303,7 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let (_, c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         let old_cx2 = c_x[1].as_ref().unwrap();
@@ -319,16 +331,24 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let ((pk_new, sk_new), c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // 旧 pk1 = None，部分更新复用 → 新 pk'1 也为 None
-        assert!(pk_new.pk1.is_none(), "pk'1 should be None (reused None from old)");
-        assert!(pk_new.pk_sps.is_none(), "pk'_SPS should be None (reused None from old)");
+        assert!(
+            pk_new.pk1.is_none(),
+            "pk'1 should be None (reused None from old)"
+        );
+        assert!(
+            pk_new.pk_sps.is_none(),
+            "pk'_SPS should be None (reused None from old)"
+        );
         assert!(sk_new.sk1.is_none(), "sk'1 should be None");
         assert!(sk_new.sk_sps.is_none(), "sk'_SPS should be None");
-        assert!(c_x_new[0].is_none(), "C'_x1 should be None (reused None from old)");
+        assert!(
+            c_x_new[0].is_none(),
+            "C'_x1 should be None (reused None from old)"
+        );
         assert!(c_x_new[1].is_some(), "C'_x2 should be regenerated");
     }
 
@@ -347,8 +367,7 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let ((pk_new, sk_new), c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // 完全重新生成：所有字段应存在
@@ -379,8 +398,7 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let ((pk_new, sk_new), c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // α 被重置为 t=3, Δ=1, Δ+α=4 > 3 → 完全重新生成
@@ -407,8 +425,7 @@ mod tests {
         let s_prime = vec![BigUint::from(1u32), BigUint::from(1u32)];
 
         let (_, c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // α'=1, split=6, x'_1=[1,2,3,4,5,6], x'_2=[7]
@@ -441,8 +458,7 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let (_, c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         for (i, cx_opt) in c_x_new.iter().enumerate() {
@@ -474,8 +490,7 @@ mod tests {
         let s_prime = vec![BigUint::from(1u32), BigUint::from(1u32)];
 
         let (_, c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // x'_2 = [4,5], s'_2 = 1 → P = (x-4)(x-5) = x^2 - 9x + 20
@@ -504,8 +519,7 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let (_, c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // C'_x2 应与旧 C_x2 不同
@@ -532,16 +546,14 @@ mod tests {
         let r_x_prime = vec![BigUint::from(30u32), BigUint::from(40u32)];
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
         let (_, c_x_new) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
         assert_eq!(c_x_new.len(), 2);
 
         // 完全重新生成
         let x_prime2: Vec<BigUint> = (1..=5).map(|i| BigUint::from(i as u32)).collect();
         let (_, c_x_new2) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime2, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime2, &r_x_prime, &s_prime,
         );
         assert_eq!(c_x_new2.len(), 2);
     }
@@ -564,8 +576,7 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let ((pk_new, sk_new), _) = key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         let pk_sps = pk_new.pk_sps.as_ref().unwrap();

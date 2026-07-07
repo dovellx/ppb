@@ -7,7 +7,7 @@
 //!
 //! **分支 1**（pk'_Λ1 ≠ pk_Λ1 且 pk'_Λ2 ≠ pk_Λ2）—— 密钥完全更新：
 //!   1. User 调用 Escrow1 生成新的 Z'_1；
-//!   2. User 将 (C'_y1, C*_y1', Z'_1) 发送给 Auditor；
+//!   2. User 将 (C'_y1, C*_y1', Z'_1, π'_1) 发送给 Auditor；
 //!   3. Auditor 调用 Endorse 验证并生成签名 σ_y，返回给 User；
 //!   4. User 调用 Escrow2 完成更新。
 //!
@@ -129,17 +129,12 @@ pub fn escrow_update(
         // Step 6: (Z'_1, C'_y1, C*_y1', π'_1) ← Escrow1(Λ, pk'_Λ, y, r'_y1, r*_y1')
         // ============================================================
         // User 使用新公钥 pk'_Λ 和新随机数执行 Escrow1。
-        let escrow1_out = escrow1::escrow1(
-            lambda,
-            pk_prime,
-            y,
-            r_y1_prime,
-            r_star_y1_prime,
-        );
+        let escrow1_out = escrow1::escrow1(lambda, pk_prime, y, r_y1_prime, r_star_y1_prime);
 
         let c_y1_prime = escrow1_out.c_y1.as_ref()?;
         let c_star_y1_prime = escrow1_out.c_star_y1.as_ref()?;
         let z1_prime = escrow1_out.z1.as_ref()?;
+        let pi1_prime = escrow1_out.pi1.as_ref()?;
 
         // ============================================================
         // Step 7: User → Auditor: (C'_y1, C*_y1', Z'_1, π'_1)
@@ -158,6 +153,7 @@ pub fn escrow_update(
             c_y1_prime,
             c_star_y1_prime,
             z1_prime,
+            pi1_prime,
         )?;
 
         // ============================================================
@@ -253,7 +249,7 @@ pub fn escrow_update(
 /// Auditor 侧：验证 Escrow 输出并生成 Endorse 签名。
 ///
 /// 封装了 Algorithm 9 中 Step 7-9 的 Auditor 操作：
-/// 1. 接收 User 发送的 (C'_y1, C*_y1', Z'_1)；
+/// 1. 接收 User 发送的 (C'_y1, C*_y1', Z'_1, π'_1)；
 /// 2. 调用 Endorse 验证 Z'_1 并生成签名 σ_y；
 /// 3. 将 σ_y 返回给 User。
 ///
@@ -264,6 +260,7 @@ pub fn escrow_update(
 /// - `c_y1_prime`：新 DF 承诺 C'_y1；
 /// - `c_star_y1_prime`：新 Pedersen 承诺 C*_y1'；
 /// - `z1_prime`：新 Escrow1 输出 Z'_1。
+/// - `pi1_prime`：新 S1 证明 π'_1。
 ///
 /// 输出：签名 σ_y，若 Endorse 验证失败则返回 None。
 fn auditor_endorse(
@@ -273,6 +270,7 @@ fn auditor_endorse(
     c_y1_prime: &BigUint,
     c_star_y1_prime: &ark_bls12_381::G1Projective,
     z1_prime: &rust::PpbEscrowOutput,
+    pi1_prime: &crate::s1::S1Proof,
 ) -> Option<mercurial_signature::Signature> {
     let endorse_out = endorse::endorse(
         lambda,
@@ -281,6 +279,7 @@ fn auditor_endorse(
         c_y1_prime,
         c_star_y1_prime,
         z1_prime,
+        pi1_prime,
     );
     endorse_out.sigma_sps
 }
@@ -297,8 +296,7 @@ mod tests {
     fn test_lambda() -> Lambda {
         let lambda_bits = 64;
         let t = 3;
-        let cpar_star = rust::setup_pedersen(lambda_bits)
-            .expect("setup_pedersen should succeed");
+        let cpar_star = rust::setup_pedersen(lambda_bits).expect("setup_pedersen should succeed");
         crate::setup::setup(lambda_bits, t, cpar_star)
     }
 
@@ -335,14 +333,20 @@ mod tests {
         let c_y1_old = escrow1_old.c_y1.as_ref().unwrap();
         let c_star_y1_old = escrow1_old.c_star_y1.as_ref().unwrap();
         let z1_old = escrow1_old.z1.as_ref().unwrap();
+        let pi1_old = escrow1_old.pi1.as_ref().unwrap();
 
-        let endorse_old = crate::endorse::endorse(
-            &lambda, &pk, &sk, c_y1_old, c_star_y1_old, z1_old,
-        );
+        let endorse_old =
+            crate::endorse::endorse(&lambda, &pk, &sk, c_y1_old, c_star_y1_old, z1_old, pi1_old);
         let sigma_y_old = endorse_old.sigma_sps.as_ref().unwrap();
 
         let z_old = crate::escrow2::escrow2(
-            &lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1_old, sigma_y_old,
+            &lambda,
+            &pk,
+            &y,
+            &r_star_y1,
+            &r_y2,
+            c_star_y1_old,
+            sigma_y_old,
         )
         .expect("Old Escrow2 should succeed");
 
@@ -353,8 +357,7 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(5u32)];
 
         let ((pk_prime, sk_prime), _c_x_prime) = keyupdate::key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // --- Escrow Update: 分支 1 ---
@@ -421,14 +424,20 @@ mod tests {
         let c_y1_old = escrow1_old.c_y1.as_ref().unwrap();
         let c_star_y1_old = escrow1_old.c_star_y1.as_ref().unwrap();
         let z1_old = escrow1_old.z1.as_ref().unwrap();
+        let pi1_old = escrow1_old.pi1.as_ref().unwrap();
 
-        let endorse_old = crate::endorse::endorse(
-            &lambda, &pk, &sk, c_y1_old, c_star_y1_old, z1_old,
-        );
+        let endorse_old =
+            crate::endorse::endorse(&lambda, &pk, &sk, c_y1_old, c_star_y1_old, z1_old, pi1_old);
         let sigma_y_old = endorse_old.sigma_sps.as_ref().unwrap();
 
         let z_old = crate::escrow2::escrow2(
-            &lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1_old, sigma_y_old,
+            &lambda,
+            &pk,
+            &y,
+            &r_star_y1,
+            &r_y2,
+            c_star_y1_old,
+            sigma_y_old,
         )
         .expect("Old Escrow2 should succeed");
 
@@ -439,8 +448,7 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let ((pk_prime, sk_prime), _c_x_prime) = keyupdate::key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // 验证部分更新的假设：pk'_Λ1 = pk_Λ1
@@ -499,14 +507,20 @@ mod tests {
         let c_y1_old = escrow1_old.c_y1.as_ref().unwrap();
         let c_star_y1_old = escrow1_old.c_star_y1.as_ref().unwrap();
         let z1_old = escrow1_old.z1.as_ref().unwrap();
+        let pi1_old = escrow1_old.pi1.as_ref().unwrap();
 
-        let endorse_old = crate::endorse::endorse(
-            &lambda, &pk, &sk, c_y1_old, c_star_y1_old, z1_old,
-        );
+        let endorse_old =
+            crate::endorse::endorse(&lambda, &pk, &sk, c_y1_old, c_star_y1_old, z1_old, pi1_old);
         let sigma_y_old = endorse_old.sigma_sps.as_ref().unwrap();
 
         let z_old = crate::escrow2::escrow2(
-            &lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1_old, sigma_y_old,
+            &lambda,
+            &pk,
+            &y,
+            &r_star_y1,
+            &r_y2,
+            c_star_y1_old,
+            sigma_y_old,
         )
         .expect("Old Escrow2 should succeed");
 
@@ -529,6 +543,9 @@ mod tests {
         );
 
         // 公钥未变化时应返回 None
-        assert!(output.is_none(), "Should return None when pk does not change");
+        assert!(
+            output.is_none(),
+            "Should return None when pk does not change"
+        );
     }
 }

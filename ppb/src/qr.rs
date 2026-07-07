@@ -2,7 +2,9 @@ use num_bigint::{BigUint, RandBigInt};
 use rand::rngs::OsRng;
 
 use crate::error::{CryptoError, CryptoResult};
-use crate::math::{abs_qr_rep, generate_safe_rsa_modulus, sample_abs_qr_element, sample_unit_mod_n2};
+use crate::math::{
+    abs_qr_rep, generate_safe_rsa_modulus, sample_abs_qr_element, sample_unit_mod_n2,
+};
 
 /// |QR_{n^2}| 承诺参数。
 #[derive(Debug, Clone)]
@@ -57,7 +59,11 @@ pub fn setup_qr(bits: usize) -> CryptoResult<QrParams> {
 /// C2 = (g')^s * (h')^r mod n^2
 ///
 /// randomness_bits 由上层映射到论文中的 2B+lambda。
-pub fn commit_qr(params: &QrParams, m: &BigUint, randomness_bits: usize) -> CryptoResult<(QrCommitment, QrOpening)> {
+pub fn commit_qr(
+    params: &QrParams,
+    m: &BigUint,
+    randomness_bits: usize,
+) -> CryptoResult<(QrCommitment, QrOpening)> {
     if m >= &params.n2 {
         return Err(CryptoError::InvalidInput("M must be in Z_{n^2}"));
     }
@@ -115,12 +121,14 @@ mod tests {
         let s = BigUint::from(111u32);
         let r = BigUint::from(222u32);
 
-        let (com, opening) = commit_qr_with_opening(&params, &m, &s, &r).expect("commit qr should succeed");
+        let (com, opening) =
+            commit_qr_with_opening(&params, &m, &s, &r).expect("commit qr should succeed");
 
         let gs = params.g.modpow(&s, &params.n2);
         let c1_manual = abs_qr_rep(&((m.clone() * gs) % &params.n2), &params.n2);
-        let c2_manual =
-            (params.g_prime.modpow(&s, &params.n2) * params.h_prime.modpow(&r, &params.n2)) % &params.n2;
+        let c2_manual = (params.g_prime.modpow(&s, &params.n2)
+            * params.h_prime.modpow(&r, &params.n2))
+            % &params.n2;
 
         assert_eq!(com.c1, c1_manual);
         assert_eq!(com.c2, c2_manual);

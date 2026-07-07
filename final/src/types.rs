@@ -44,7 +44,9 @@ pub struct WatchlistUpdatePlan<'a> {
 
 pub fn split_watchlist<'a>(x: &'a [BigUint], t: usize) -> CryptoResult<SplitWatchlist<'a>> {
     if t == 0 {
-        return Err(CryptoError::InvalidInput("watchlist threshold t must be > 0"));
+        return Err(CryptoError::InvalidInput(
+            "watchlist threshold t must be > 0",
+        ));
     }
     if x.is_empty() {
         return Err(CryptoError::InvalidInput("watchlist must be non-empty"));
@@ -55,11 +57,7 @@ pub fn split_watchlist<'a>(x: &'a [BigUint], t: usize) -> CryptoResult<SplitWatc
         0
     } else {
         let alpha = len % t;
-        if alpha == 0 {
-            len - t
-        } else {
-            len - alpha
-        }
+        if alpha == 0 { len - t } else { len - alpha }
     };
 
     let prefix = if split_index == 0 {

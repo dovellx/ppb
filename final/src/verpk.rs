@@ -22,11 +22,7 @@ use crate::setup::Lambda;
 /// 3. `c_x`：承诺 C_x = (C_x1, C_x2)。
 ///
 /// 输出：1（有效）或 0（无效）。
-pub fn ver_pk(
-    lambda: &Lambda,
-    pk: &PublicKey,
-    c_x: &[Option<PolyCommitment>],
-) -> bool {
+pub fn ver_pk(lambda: &Lambda, pk: &PublicKey, c_x: &[Option<PolyCommitment>]) -> bool {
     assert!(c_x.len() == 2, "C_x must have exactly 2 elements");
 
     // Step 1: (pp, cpar*, cpar, inv, Λ_BLUE, t, crs1, crs2) = Λ
@@ -37,7 +33,9 @@ pub fn ver_pk(
 
     // Step 4: 若 pk_Λ1 ≠ ⊥，验证 BLUE.VerPK(Λ_BLUE, pk_Λ1, C_x1)
     if let Some(ref pk1) = pk.pk1 {
-        let cx1 = c_x[0].as_ref().expect("C_x1 must exist when pk_Λ1 is not ⊥");
+        let cx1 = c_x[0]
+            .as_ref()
+            .expect("C_x1 must exist when pk_Λ1 is not ⊥");
         if !verify_pk(params, pk1, &cx1.c) {
             return false;
         }
@@ -64,8 +62,7 @@ mod tests {
     fn test_lambda() -> Lambda {
         let lambda_bits = 64;
         let t = 3;
-        let cpar_star = rust::setup_pedersen(lambda_bits)
-            .expect("setup_pedersen should succeed");
+        let cpar_star = rust::setup_pedersen(lambda_bits).expect("setup_pedersen should succeed");
         crate::setup::setup(lambda_bits, t, cpar_star)
     }
 
@@ -83,7 +80,10 @@ mod tests {
 
         let ((pk, _sk), c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
-        assert!(ver_pk(&lambda, &pk, &c_x), "valid pk should pass verification");
+        assert!(
+            ver_pk(&lambda, &pk, &c_x),
+            "valid pk should pass verification"
+        );
     }
 
     // ================================================================
@@ -100,7 +100,10 @@ mod tests {
 
         let ((pk, _sk), c_x) = keygen::keygen(&lambda, &x, &r_x, &s);
 
-        assert!(ver_pk(&lambda, &pk, &c_x), "valid small-list pk should pass verification");
+        assert!(
+            ver_pk(&lambda, &pk, &c_x),
+            "valid small-list pk should pass verification"
+        );
     }
 
     // ================================================================
@@ -121,7 +124,10 @@ mod tests {
         let cx2 = c_x[1].as_mut().unwrap();
         cx2.c = (&cx2.c + BigUint::from(1u32)) % &lambda.cpar.n2;
 
-        assert!(!ver_pk(&lambda, &pk, &c_x), "tampered C_x2 should fail verification");
+        assert!(
+            !ver_pk(&lambda, &pk, &c_x),
+            "tampered C_x2 should fail verification"
+        );
     }
 
     // ================================================================
@@ -142,7 +148,10 @@ mod tests {
         let cx1 = c_x[0].as_mut().unwrap();
         cx1.c = (&cx1.c + BigUint::from(1u32)) % &lambda.cpar.n2;
 
-        assert!(!ver_pk(&lambda, &pk, &c_x), "tampered C_x1 should fail verification");
+        assert!(
+            !ver_pk(&lambda, &pk, &c_x),
+            "tampered C_x1 should fail verification"
+        );
     }
 
     // ================================================================
@@ -164,11 +173,13 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let ((pk_new, _sk_new), c_x_new) = crate::keyupdate::key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
-        assert!(ver_pk(&lambda, &pk_new, &c_x_new), "pk after key update should pass verification");
+        assert!(
+            ver_pk(&lambda, &pk_new, &c_x_new),
+            "pk after key update should pass verification"
+        );
     }
 
     // ================================================================

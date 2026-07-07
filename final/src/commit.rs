@@ -49,12 +49,7 @@ pub struct PolyCommitment {
 ///     C = H^{r_x} * Π_i G_i^{a_i} mod n^2。
 ///
 /// Step 4: 返回承诺值 C_x。
-pub fn commit(
-    lambda: &Lambda,
-    x: &[BigUint],
-    r_x: &BigUint,
-    s: &BigUint,
-) -> PolyCommitment {
+pub fn commit(lambda: &Lambda, x: &[BigUint], r_x: &BigUint, s: &BigUint) -> PolyCommitment {
     let cpar = &lambda.cpar;
 
     let (commitment, coeffs) =
@@ -77,8 +72,7 @@ mod tests {
     fn test_lambda() -> Lambda {
         let lambda_bits = 64;
         let t = 3;
-        let cpar_star = rust::setup_pedersen(lambda_bits)
-            .expect("setup_pedersen should succeed");
+        let cpar_star = rust::setup_pedersen(lambda_bits).expect("setup_pedersen should succeed");
         crate::setup::setup(lambda_bits, t, cpar_star)
     }
 
@@ -183,7 +177,11 @@ mod tests {
         let lambda = test_lambda();
         let n = &lambda.cpar.n;
 
-        let x = vec![BigUint::from(1u32), BigUint::from(2u32), BigUint::from(3u32)];
+        let x = vec![
+            BigUint::from(1u32),
+            BigUint::from(2u32),
+            BigUint::from(3u32),
+        ];
         let s = BigUint::from(1u32);
         let r_x = BigUint::from(0u32);
 
@@ -228,7 +226,10 @@ mod tests {
         let pc1 = commit(&lambda, &[BigUint::from(5u32)], &r_x, &s);
         let pc2 = commit(&lambda, &[BigUint::from(6u32)], &r_x, &s);
 
-        assert_ne!(pc1.c, pc2.c, "different roots should yield different commitments");
+        assert_ne!(
+            pc1.c, pc2.c,
+            "different roots should yield different commitments"
+        );
     }
 
     /// 不同的 r_x 产生不同的承诺值（h^{r_x} 分量不同）。
@@ -242,7 +243,10 @@ mod tests {
         let pc1 = commit(&lambda, &x, &BigUint::from(10u32), &s);
         let pc2 = commit(&lambda, &x, &BigUint::from(20u32), &s);
 
-        assert_ne!(pc1.c, pc2.c, "different r_x should yield different commitments");
+        assert_ne!(
+            pc1.c, pc2.c,
+            "different r_x should yield different commitments"
+        );
     }
 
     // ================================================================
@@ -264,7 +268,10 @@ mod tests {
             rust::commit_df_multibase(cpar, &x, &r_x, &s).expect("multibase commit should succeed");
 
         assert_eq!(pc.coeffs, expected_coeffs);
-        assert_eq!(pc.c, expected.c, "commitment should match core multibase computation");
+        assert_eq!(
+            pc.c, expected.c,
+            "commitment should match core multibase computation"
+        );
     }
 
     /// 旧的 g^{sum(a_i)} 方案会让这两个不同系数向量在相同 r 下碰撞。
@@ -282,12 +289,24 @@ mod tests {
             &s,
         );
 
-        let sum1: BigUint = pc1.coeffs.iter().fold(BigUint::from(0u32), |acc, a| acc + a);
-        let sum2: BigUint = pc2.coeffs.iter().fold(BigUint::from(0u32), |acc, a| acc + a);
+        let sum1: BigUint = pc1
+            .coeffs
+            .iter()
+            .fold(BigUint::from(0u32), |acc, a| acc + a);
+        let sum2: BigUint = pc2
+            .coeffs
+            .iter()
+            .fold(BigUint::from(0u32), |acc, a| acc + a);
 
-        assert_eq!(sum1, sum2, "test inputs should collide under the old sum-based formula");
+        assert_eq!(
+            sum1, sum2,
+            "test inputs should collide under the old sum-based formula"
+        );
         assert_ne!(pc1.coeffs, pc2.coeffs);
-        assert_ne!(pc1.c, pc2.c, "multibase commitment must bind coefficient positions");
+        assert_ne!(
+            pc1.c, pc2.c,
+            "multibase commitment must bind coefficient positions"
+        );
     }
 
     // ================================================================
@@ -342,7 +361,11 @@ mod tests {
 
         for s_val in [1u32, 5u32, 100u32, 999u32] {
             let s = BigUint::from(s_val);
-            let x = vec![BigUint::from(10u32), BigUint::from(20u32), BigUint::from(30u32)];
+            let x = vec![
+                BigUint::from(10u32),
+                BigUint::from(20u32),
+                BigUint::from(30u32),
+            ];
             let r_x = BigUint::from(0u32);
 
             let pc = commit(&lambda, &x, &r_x, &s);

@@ -34,12 +34,7 @@ use crate::setup::Lambda;
 /// 4. `z`：Escrow2 输出 Z = (Z'_1, Z_2)。
 ///
 /// 输出：true 表示验证通过，false 表示验证失败。
-pub fn escrow_verify(
-    lambda: &Lambda,
-    pk: &PublicKey,
-    c_y2: &BigUint,
-    z: &Escrow2Output,
-) -> bool {
+pub fn escrow_verify(lambda: &Lambda, pk: &PublicKey, c_y2: &BigUint, z: &Escrow2Output) -> bool {
     // ============================================================
     // Step 1: (pp, cpar*, cpar, inv, Λ_BLUE, t, crs1, crs2) = Λ
     // ============================================================
@@ -74,8 +69,7 @@ pub fn escrow_verify(
             // ============================================================
             // Step 4b: BLUE.VerEscrow(Λ_BLUE, pk_Λ2, C_y2, Z_2) = 1
             // ============================================================
-            if !rust::ppb::verify_escrow(&lambda.lambda_blue, &pk.pk2, c_y2, &z.z2)
-                .unwrap_or(false)
+            if !rust::ppb::verify_escrow(&lambda.lambda_blue, &pk.pk2, c_y2, &z.z2).unwrap_or(false)
             {
                 return false;
             }
@@ -98,8 +92,7 @@ pub fn escrow_verify(
             // ============================================================
             // Step 7: BLUE.VerEscrow(Λ_BLUE, pk_Λ2, C_y2, Z_2) = 1
             // ============================================================
-            rust::ppb::verify_escrow(&lambda.lambda_blue, &pk.pk2, c_y2, &z.z2)
-                .unwrap_or(false)
+            rust::ppb::verify_escrow(&lambda.lambda_blue, &pk.pk2, c_y2, &z.z2).unwrap_or(false)
         }
         // ============================================================
         // Step 9: 其余情况返回 0
@@ -112,8 +105,8 @@ pub fn escrow_verify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num_bigint::BigUint;
     use ark_ff::UniformRand;
+    use num_bigint::BigUint;
 
     use crate::keygen;
 
@@ -121,8 +114,7 @@ mod tests {
     fn test_lambda() -> Lambda {
         let lambda_bits = 64;
         let t = 3;
-        let cpar_star = rust::setup_pedersen(lambda_bits)
-            .expect("setup_pedersen should succeed");
+        let cpar_star = rust::setup_pedersen(lambda_bits).expect("setup_pedersen should succeed");
         crate::setup::setup(lambda_bits, t, cpar_star)
     }
 
@@ -153,15 +145,19 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         let z = crate::escrow2::escrow2(&lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1, sigma_y)
             .expect("Escrow2 should succeed");
 
         // 验证应通过
-        assert!(escrow_verify(&lambda, &pk, &z.c_y2, &z), "Escrow verify should pass for valid escrow");
+        assert!(
+            escrow_verify(&lambda, &pk, &z.c_y2, &z),
+            "Escrow verify should pass for valid escrow"
+        );
     }
 
     // ================================================================
@@ -186,12 +182,9 @@ mod tests {
         let r_star_y1 = BigUint::from(53u32);
 
         // ℓ ≤ t 时 escrow2 不需要真实签名
-        let c_star_y1_placeholder = rust::com_pedersen(
-            &lambda.cpar_star,
-            &BigUint::from(0u32),
-            &r_star_y1,
-        )
-        .expect("Pedersen commitment failed");
+        let c_star_y1_placeholder =
+            rust::com_pedersen(&lambda.cpar_star, &BigUint::from(0u32), &r_star_y1)
+                .expect("Pedersen commitment failed");
 
         let fake_sig = {
             let mut rng = ark_std::rand::rngs::OsRng;
@@ -202,12 +195,20 @@ mod tests {
         };
 
         let z = crate::escrow2::escrow2(
-            &lambda, &pk, &y, &r_star_y1, &r_y2,
-            &c_star_y1_placeholder, &fake_sig,
+            &lambda,
+            &pk,
+            &y,
+            &r_star_y1,
+            &r_y2,
+            &c_star_y1_placeholder,
+            &fake_sig,
         )
         .expect("Escrow2 should succeed for small list");
 
-        assert!(escrow_verify(&lambda, &pk, &z.c_y2, &z), "Escrow verify should pass for small list");
+        assert!(
+            escrow_verify(&lambda, &pk, &z.c_y2, &z),
+            "Escrow verify should pass for small list"
+        );
     }
 
     // ================================================================
@@ -234,8 +235,9 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         let z = crate::escrow2::escrow2(&lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1, sigma_y)
@@ -243,7 +245,10 @@ mod tests {
 
         // 篡改 C_y2
         let tampered_c_y2 = &z.c_y2 + BigUint::from(1u32);
-        assert!(!escrow_verify(&lambda, &pk, &tampered_c_y2, &z), "Escrow verify should fail for tampered C_y2");
+        assert!(
+            !escrow_verify(&lambda, &pk, &tampered_c_y2, &z),
+            "Escrow verify should fail for tampered C_y2"
+        );
     }
 
     #[test]
@@ -267,8 +272,9 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         let mut z =
@@ -307,12 +313,22 @@ mod tests {
         let c_y1_old = escrow1_old.c_y1.as_ref().unwrap();
         let c_star_y1_old = escrow1_old.c_star_y1.as_ref().unwrap();
         let z1_old = escrow1_old.z1.as_ref().unwrap();
+        let pi1_old = escrow1_old.pi1.as_ref().unwrap();
 
-        let endorse_old = crate::endorse::endorse(&lambda, &pk, &sk, c_y1_old, c_star_y1_old, z1_old);
+        let endorse_old =
+            crate::endorse::endorse(&lambda, &pk, &sk, c_y1_old, c_star_y1_old, z1_old, pi1_old);
         let sigma_y_old = endorse_old.sigma_sps.as_ref().unwrap();
 
-        let z_old = crate::escrow2::escrow2(&lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1_old, sigma_y_old)
-            .expect("Old Escrow2 should succeed");
+        let z_old = crate::escrow2::escrow2(
+            &lambda,
+            &pk,
+            &y,
+            &r_star_y1,
+            &r_y2,
+            c_star_y1_old,
+            sigma_y_old,
+        )
+        .expect("Old Escrow2 should succeed");
 
         // KeyUpdate: 完全重生成
         let x_prime: Vec<BigUint> = (1..=16).map(|i| BigUint::from(i as u32)).collect();
@@ -320,8 +336,7 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(5u32)];
 
         let ((pk_prime, sk_prime), _c_x_prime) = crate::keyupdate::key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // Escrow Update
@@ -330,15 +345,31 @@ mod tests {
         let r_star_y1_prime = BigUint::from(107u32);
 
         let update_out = crate::escrow_update::escrow_update(
-            &lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1_old, &z_old,
-            &pk_prime, &r_y1_prime, &r_y2_prime, &r_star_y1_prime,
-            sigma_y_old, &sk_prime, &x_prime,
+            &lambda,
+            &pk,
+            &y,
+            &r_star_y1,
+            &r_y2,
+            c_star_y1_old,
+            &z_old,
+            &pk_prime,
+            &r_y1_prime,
+            &r_y2_prime,
+            &r_star_y1_prime,
+            sigma_y_old,
+            &sk_prime,
+            &x_prime,
         )
         .expect("Escrow update should succeed");
 
         // 更新后的 Escrow 应通过验证
         assert!(
-            escrow_verify(&lambda, &pk_prime, &update_out.c_y2_prime, &update_out.z_prime),
+            escrow_verify(
+                &lambda,
+                &pk_prime,
+                &update_out.c_y2_prime,
+                &update_out.z_prime
+            ),
             "Escrow verify should pass after full key update"
         );
     }
@@ -368,12 +399,22 @@ mod tests {
         let c_y1_old = escrow1_old.c_y1.as_ref().unwrap();
         let c_star_y1_old = escrow1_old.c_star_y1.as_ref().unwrap();
         let z1_old = escrow1_old.z1.as_ref().unwrap();
+        let pi1_old = escrow1_old.pi1.as_ref().unwrap();
 
-        let endorse_old = crate::endorse::endorse(&lambda, &pk, &sk, c_y1_old, c_star_y1_old, z1_old);
+        let endorse_old =
+            crate::endorse::endorse(&lambda, &pk, &sk, c_y1_old, c_star_y1_old, z1_old, pi1_old);
         let sigma_y_old = endorse_old.sigma_sps.as_ref().unwrap();
 
-        let z_old = crate::escrow2::escrow2(&lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1_old, sigma_y_old)
-            .expect("Old Escrow2 should succeed");
+        let z_old = crate::escrow2::escrow2(
+            &lambda,
+            &pk,
+            &y,
+            &r_star_y1,
+            &r_y2,
+            c_star_y1_old,
+            sigma_y_old,
+        )
+        .expect("Old Escrow2 should succeed");
 
         // KeyUpdate: 部分更新
         let x_prime: Vec<BigUint> = (1..=6).map(|i| BigUint::from(i as u32)).collect();
@@ -381,23 +422,38 @@ mod tests {
         let s_prime = vec![BigUint::from(3u32), BigUint::from(4u32)];
 
         let ((pk_prime, sk_prime), _c_x_prime) = crate::keyupdate::key_update(
-            &lambda, &x, &r_x, &s, &pk, &sk, &c_x,
-            &x_prime, &r_x_prime, &s_prime,
+            &lambda, &x, &r_x, &s, &pk, &sk, &c_x, &x_prime, &r_x_prime, &s_prime,
         );
 
         // Escrow Update: 分支 2
         let r_y2_prime = BigUint::from(103u32);
 
         let update_out = crate::escrow_update::escrow_update(
-            &lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1_old, &z_old,
-            &pk_prime, &BigUint::from(0u32), &r_y2_prime, &BigUint::from(0u32),
-            sigma_y_old, &sk_prime, &x_prime,
+            &lambda,
+            &pk,
+            &y,
+            &r_star_y1,
+            &r_y2,
+            c_star_y1_old,
+            &z_old,
+            &pk_prime,
+            &BigUint::from(0u32),
+            &r_y2_prime,
+            &BigUint::from(0u32),
+            sigma_y_old,
+            &sk_prime,
+            &x_prime,
         )
         .expect("Escrow update should succeed");
 
         // 更新后的 Escrow 应通过验证
         assert!(
-            escrow_verify(&lambda, &pk_prime, &update_out.c_y2_prime, &update_out.z_prime),
+            escrow_verify(
+                &lambda,
+                &pk_prime,
+                &update_out.c_y2_prime,
+                &update_out.z_prime
+            ),
             "Escrow verify should pass after partial key update"
         );
     }

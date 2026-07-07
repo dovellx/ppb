@@ -4,11 +4,11 @@ use rand::rngs::OsRng;
 
 use crate::cs::CsCiphertext;
 use crate::cs_commit::{
-    commit_cs, prove_cs_add, prove_cs_com, prove_cs_com_ciphertext, prove_cs_mult, CsAddProof,
-    CsComCtProof, CsComProof, CsCommitOpening, CsCommitParams, CsCommitment,
-    CsCommitmentWithOpening, CsMultProof,
+    CsAddProof, CsComCtProof, CsComProof, CsCommitOpening, CsCommitParams, CsCommitment,
+    CsCommitmentWithOpening, CsMultProof, commit_cs, prove_cs_add, prove_cs_com,
+    prove_cs_com_ciphertext, prove_cs_mult,
 };
-use crate::df::{commit_df, DfParams};
+use crate::df::{DfParams, commit_df};
 use crate::error::{CryptoError, CryptoResult};
 use crate::hash::fiat_shamir_challenge_biguints;
 use crate::math::{derive_b_bits_from_n2, modinv};
@@ -39,7 +39,9 @@ impl CiphertextPolynomial {
     /// 2. `n2` 必须非零。
     pub fn new(coeffs: Vec<CamenischShoupCiphertext>, n2: &BigUint) -> CryptoResult<Self> {
         if coeffs.is_empty() {
-            return Err(CryptoError::InvalidInput("ciphertext polynomial must be non-empty"));
+            return Err(CryptoError::InvalidInput(
+                "ciphertext polynomial must be non-empty",
+            ));
         }
         if n2.is_zero() {
             return Err(CryptoError::InvalidInput("n^2 must be non-zero"));
@@ -152,7 +154,11 @@ impl CiphertextPolynomial {
         let mut folded = Vec::with_capacity(self.coeffs.len());
         for i in 0..self.coeffs.len() {
             let upper_scaled = Self::homomorphic_scalar_mul(&upper_poly.coeffs[i], alpha, &self.n2);
-            folded.push(Self::homomorphic_add(&self.coeffs[i], &upper_scaled, &self.n2));
+            folded.push(Self::homomorphic_add(
+                &self.coeffs[i],
+                &upper_scaled,
+                &self.n2,
+            ));
         }
 
         CiphertextPolynomial {
@@ -308,7 +314,10 @@ fn com_ah_with_zero_randomness(
         b2: 1,
     };
 
-    Ok(CsCommitmentWithOpening { commitment, opening })
+    Ok(CsCommitmentWithOpening {
+        commitment,
+        opening,
+    })
 }
 
 /// 计算默认的 AH/CS 承诺随机位长。
@@ -379,7 +388,9 @@ fn lookup_cy_for_power(
     let entry = aux_openings
         .iter()
         .find(|e| e.round == round)
-        .ok_or(CryptoError::InvalidInput("aux does not contain required y^(2^i) commitment"))?;
+        .ok_or(CryptoError::InvalidInput(
+            "aux does not contain required y^(2^i) commitment",
+        ))?;
     Ok((entry.cy_2i.clone(), entry.r_i.clone()))
 }
 
@@ -470,10 +481,26 @@ fn derive_mult_signs(
     exp: &BigInt,
 ) -> CryptoResult<[i8; 4]> {
     let exp_is_even = (exp % BigInt::from(2u32)) == BigInt::zero();
-    let in_a1_exp = if exp_is_even { 1i16 } else { i16::from(input_opening.a1) };
-    let in_b1_exp = if exp_is_even { 1i16 } else { i16::from(input_opening.b1) };
-    let in_a2_exp = if exp_is_even { 1i16 } else { i16::from(input_opening.a2) };
-    let in_b2_exp = if exp_is_even { 1i16 } else { i16::from(input_opening.b2) };
+    let in_a1_exp = if exp_is_even {
+        1i16
+    } else {
+        i16::from(input_opening.a1)
+    };
+    let in_b1_exp = if exp_is_even {
+        1i16
+    } else {
+        i16::from(input_opening.b1)
+    };
+    let in_a2_exp = if exp_is_even {
+        1i16
+    } else {
+        i16::from(input_opening.a2)
+    };
+    let in_b2_exp = if exp_is_even {
+        1i16
+    } else {
+        i16::from(input_opening.b2)
+    };
 
     let s1 = i16::from(output_opening.a1) * in_a1_exp;
     let s2 = i16::from(output_opening.b1) * in_b1_exp;
@@ -498,7 +525,12 @@ fn derive_mult_signs(
 ///
 /// 这里的 tau 采用工程转写：
 /// tau = (Cy, c0, ..., c_{n-1}, cP)。
-fn fs_alpha_for_pok_star(c1: &CsCommitment, c2: &CsCommitment, c3: &CsCommitment, tau: &PoKTranscript) -> BigUint {
+fn fs_alpha_for_pok_star(
+    c1: &CsCommitment,
+    c2: &CsCommitment,
+    c3: &CsCommitment,
+    tau: &PoKTranscript,
+) -> BigUint {
     let mut fields = vec![
         c1.c1.clone(),
         c1.c2.clone(),
@@ -552,28 +584,37 @@ fn fs_challenge_for_square_df(
     r1: &BigUint,
     r2: &BigUint,
 ) -> BigUint {
-    fiat_shamir_challenge_biguints(&[&params_df.n, &params_df.g, &params_df.h, c_in, c_out, r1, r2])
+    fiat_shamir_challenge_biguints(&[
+        &params_df.n,
+        &params_df.g,
+        &params_df.h,
+        c_in,
+        c_out,
+        r1,
+        r2,
+    ])
 }
 
 /// BigUint -> BigInt 的安全转换辅助。
 fn bu_to_bi(v: &BigUint) -> CryptoResult<BigInt> {
-    v.to_bigint()
-        .ok_or(CryptoError::InvalidInput("BigUint->BigInt conversion failed"))
+    v.to_bigint().ok_or(CryptoError::InvalidInput(
+        "BigUint->BigInt conversion failed",
+    ))
 }
 
 /// 有符号指数模幂：base^exp mod modulus。
 fn modpow_signed(base: &BigUint, exp: &BigInt, modulus: &BigUint) -> CryptoResult<BigUint> {
     if exp >= &BigInt::zero() {
-        let exp_u = exp
-            .to_biguint()
-            .ok_or(CryptoError::InvalidInput("non-negative exponent conversion failed"))?;
+        let exp_u = exp.to_biguint().ok_or(CryptoError::InvalidInput(
+            "non-negative exponent conversion failed",
+        ))?;
         return Ok(base.modpow(&exp_u, modulus));
     }
 
     let inv = modinv(base, modulus)?;
-    let abs_exp = (-exp)
-        .to_biguint()
-        .ok_or(CryptoError::InvalidInput("negative exponent abs conversion failed"))?;
+    let abs_exp = (-exp).to_biguint().ok_or(CryptoError::InvalidInput(
+        "negative exponent abs conversion failed",
+    ))?;
     Ok(inv.modpow(&abs_exp, modulus))
 }
 
@@ -632,15 +673,23 @@ fn prove_mult_with_lambda(
     }
 
     // 先检查 witness 与公共输入是否一致，避免对错误实例出证明。
-    let expected_in = (params_df.g.modpow(z, &params_df.n2) * params_df.h.modpow(r_prev, &params_df.n2)) % &params_df.n2;
+    let expected_in = (params_df.g.modpow(z, &params_df.n2)
+        * params_df.h.modpow(r_prev, &params_df.n2))
+        % &params_df.n2;
     if &expected_in != cy_prev {
-        return Err(CryptoError::InvalidInput("witness does not satisfy C_in commitment equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy C_in commitment equation",
+        ));
     }
 
     let z_sq = z * z;
-    let expected_out = (params_df.g.modpow(&z_sq, &params_df.n2) * params_df.h.modpow(r_next, &params_df.n2)) % &params_df.n2;
+    let expected_out = (params_df.g.modpow(&z_sq, &params_df.n2)
+        * params_df.h.modpow(r_next, &params_df.n2))
+        % &params_df.n2;
     if &expected_out != cy_next {
-        return Err(CryptoError::InvalidInput("witness does not satisfy C_out commitment equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy C_out commitment equation",
+        ));
     }
 
     // gamma = r_out - z * r_in（整数域，可为负）。
@@ -665,9 +714,12 @@ fn prove_mult_with_lambda(
         .and_then(|v| v.checked_add(lambda_bits.checked_mul(2)?))
         .ok_or(CryptoError::InvalidInput("2B+2lambda overflow"))?;
 
-    let k_z_bits_u64 = u64::try_from(k_z_bits).map_err(|_| CryptoError::InvalidInput("B+2lambda too large"))?;
-    let k_rin_bits_u64 = u64::try_from(k_rin_bits).map_err(|_| CryptoError::InvalidInput("B+2lambda too large"))?;
-    let k_gamma_bits_u64 = u64::try_from(k_gamma_bits).map_err(|_| CryptoError::InvalidInput("2B+2lambda too large"))?;
+    let k_z_bits_u64 =
+        u64::try_from(k_z_bits).map_err(|_| CryptoError::InvalidInput("B+2lambda too large"))?;
+    let k_rin_bits_u64 =
+        u64::try_from(k_rin_bits).map_err(|_| CryptoError::InvalidInput("B+2lambda too large"))?;
+    let k_gamma_bits_u64 = u64::try_from(k_gamma_bits)
+        .map_err(|_| CryptoError::InvalidInput("2B+2lambda too large"))?;
 
     let mut rng = OsRng;
     let k_z = rng.gen_biguint(k_z_bits_u64);
@@ -675,8 +727,10 @@ fn prove_mult_with_lambda(
     let k_gamma = rng.gen_biguint(k_gamma_bits_u64);
 
     // Commit 阶段。
-    let r1 = (params_df.g.modpow(&k_z, &params_df.n2) * params_df.h.modpow(&k_rin, &params_df.n2)) % &params_df.n2;
-    let r2 = (cy_prev.modpow(&k_z, &params_df.n2) * params_df.h.modpow(&k_gamma, &params_df.n2)) % &params_df.n2;
+    let r1 = (params_df.g.modpow(&k_z, &params_df.n2) * params_df.h.modpow(&k_rin, &params_df.n2))
+        % &params_df.n2;
+    let r2 = (cy_prev.modpow(&k_z, &params_df.n2) * params_df.h.modpow(&k_gamma, &params_df.n2))
+        % &params_df.n2;
 
     // Challenge 阶段。
     let e = fs_challenge_for_square_df(params_df, cy_prev, cy_next, &r1, &r2);
@@ -739,9 +793,13 @@ pub fn prove_df_open_public_scalar(
         return Err(CryptoError::InvalidInput("lambda_bits must be > 0"));
     }
 
-    let expected = (params_df.g.modpow(message, &params_df.n2) * params_df.h.modpow(r, &params_df.n2)) % &params_df.n2;
+    let expected = (params_df.g.modpow(message, &params_df.n2)
+        * params_df.h.modpow(r, &params_df.n2))
+        % &params_df.n2;
     if &expected != commitment {
-        return Err(CryptoError::InvalidInput("DF opening witness does not match commitment"));
+        return Err(CryptoError::InvalidInput(
+            "DF opening witness does not match commitment",
+        ));
     }
 
     let blind_bits = derive_b_bits_from_n2(&params_df.n2)?
@@ -751,7 +809,8 @@ pub fn prove_df_open_public_scalar(
                 .ok_or(CryptoError::InvalidInput("2*lambda overflow"))?,
         )
         .ok_or(CryptoError::InvalidInput("B+2lambda overflow"))?;
-    let blind_bits_u64 = u64::try_from(blind_bits).map_err(|_| CryptoError::InvalidInput("B+2lambda too large"))?;
+    let blind_bits_u64 =
+        u64::try_from(blind_bits).map_err(|_| CryptoError::InvalidInput("B+2lambda too large"))?;
 
     let mut rng = OsRng;
     let k_r = rng.gen_biguint(blind_bits_u64);
@@ -776,7 +835,8 @@ pub fn verify_df_open_public_scalar(
     let g_m = params_df.g.modpow(message, &params_df.n2);
     let g_m_inv = modinv(&g_m, &params_df.n2)?;
     let h_r = (commitment * g_m_inv) % &params_df.n2;
-    let e = fs_challenge_for_df_open_public_scalar(params_df, commitment, message, &proof.r_commitment);
+    let e =
+        fs_challenge_for_df_open_public_scalar(params_df, commitment, message, &proof.r_commitment);
     let lhs = params_df.h.modpow(&proof.z_r, &params_df.n2);
     let rhs = (&proof.r_commitment * h_r.modpow(&e, &params_df.n2)) % &params_df.n2;
 
@@ -923,7 +983,11 @@ fn pok_star_recursive(
     )?;
     let alpha_bi = bu_to_bi(&alpha)?;
     let r_alpha_bi = bu_to_bi(&cy_alpha_with_open.r)?;
-    let b_alpha = derive_mult_signs(&c_alpha_e3_with_open.opening, &c3_with_open.opening, &alpha_bi)?;
+    let b_alpha = derive_mult_signs(
+        &c_alpha_e3_with_open.opening,
+        &c3_with_open.opening,
+        &alpha_bi,
+    )?;
     let pi_alpha_mul_e3 = prove_cs_mult(
         params_ah,
         &c_alpha_e3_with_open.commitment,
@@ -1155,8 +1219,8 @@ mod tests {
 
     use super::*;
     use crate::cs::{enc_cs, keygen_cs, setup_cs};
-    use crate::df::commit_df_with_opening;
     use crate::df::DfParams;
+    use crate::df::commit_df_with_opening;
     use crate::math::sample_unit_mod_n2;
     use crate::setup_cs_commit;
 
@@ -1172,9 +1236,11 @@ mod tests {
             g: sample_unit_mod_n2(&mut rand::rngs::OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut rand::rngs::OsRng, &cs_params.n2),
         };
-        let params_ah = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params_ah =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
-        let wrapped = com_ah_with_zero_randomness(&params_ah, &ct).expect("zero random commit should succeed");
+        let wrapped = com_ah_with_zero_randomness(&params_ah, &ct)
+            .expect("zero random commit should succeed");
         assert_eq!(wrapped.commitment.c1, ct.c0 % &params_ah.n2);
         assert_eq!(wrapped.commitment.c2, BigUint::one());
         assert_eq!(wrapped.commitment.c3, ct.c1 % &params_ah.n2);
@@ -1198,7 +1264,8 @@ mod tests {
         let r_out = BigUint::from(123u32);
         let c_in = commit_df_with_opening(&df_params, &z, &r_in).expect("commit in should succeed");
         let z_sq = &z * &z;
-        let c_out = commit_df_with_opening(&df_params, &z_sq, &r_out).expect("commit out should succeed");
+        let c_out =
+            commit_df_with_opening(&df_params, &z_sq, &r_out).expect("commit out should succeed");
 
         let proof = prove_mult(&df_params, &c_in.c, &c_in.r, &c_out.c, &c_out.r, &z)
             .expect("prove mult should succeed");
@@ -1221,7 +1288,8 @@ mod tests {
         let r_out = BigUint::from(19u32);
         let c_in = commit_df_with_opening(&df_params, &z, &r_in).expect("commit in should succeed");
         let z_sq = &z * &z;
-        let c_out = commit_df_with_opening(&df_params, &z_sq, &r_out).expect("commit out should succeed");
+        let c_out =
+            commit_df_with_opening(&df_params, &z_sq, &r_out).expect("commit out should succeed");
 
         let mut proof = prove_mult(&df_params, &c_in.c, &c_in.r, &c_out.c, &c_out.r, &z)
             .expect("prove mult should succeed");
@@ -1240,8 +1308,9 @@ mod tests {
         let x1 = enc_cs(&cs_params, &pk, &BigUint::from(2u32)).expect("enc x1 should succeed");
         let x2 = enc_cs(&cs_params, &pk, &BigUint::from(3u32)).expect("enc x2 should succeed");
 
-        let poly = CiphertextPolynomial::new(vec![x0.clone(), x1.clone(), x2.clone()], &cs_params.n2)
-            .expect("poly construction should succeed");
+        let poly =
+            CiphertextPolynomial::new(vec![x0.clone(), x1.clone(), x2.clone()], &cs_params.n2)
+                .expect("poly construction should succeed");
         let y = BigUint::from(3u32);
         let eval = poly.evaluate(&y);
 
@@ -1273,8 +1342,11 @@ mod tests {
         let c2 = enc_cs(&cs_params, &pk, &BigUint::from(3u32)).expect("enc c2 should succeed");
         let c3 = enc_cs(&cs_params, &pk, &BigUint::from(4u32)).expect("enc c3 should succeed");
 
-        let poly = CiphertextPolynomial::new(vec![c0.clone(), c1.clone(), c2.clone(), c3.clone()], &cs_params.n2)
-            .expect("poly construction should succeed");
+        let poly = CiphertextPolynomial::new(
+            vec![c0.clone(), c1.clone(), c2.clone(), c3.clone()],
+            &cs_params.n2,
+        )
+        .expect("poly construction should succeed");
         let (low, up) = poly.split_in_half();
         assert_eq!(low.len(), 2);
         assert_eq!(up.len(), 2);
@@ -1322,22 +1394,15 @@ mod tests {
             g: sample_unit_mod_n2(&mut rand::rngs::OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut rand::rngs::OsRng, &cs_params.n2),
         };
-        let params_ah = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params_ah =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let r_y = BigUint::from(7u32);
-        let cy = (df_params.g.modpow(&y, &df_params.n2) * df_params.h.modpow(&r_y, &df_params.n2)) % &df_params.n2;
+        let cy = (df_params.g.modpow(&y, &df_params.n2) * df_params.h.modpow(&r_y, &df_params.n2))
+            % &df_params.n2;
 
-        let proof = pokp(
-            &params_ah,
-            &df_params,
-            &r_y,
-            &y,
-            &cy,
-            &[c0, c1],
-            &c_p,
-            64,
-        )
-        .expect("PoKP should run to completion");
+        let proof = pokp(&params_ah, &df_params, &r_y, &y, &cy, &[c0, c1], &c_p, 64)
+            .expect("PoKP should run to completion");
 
         match proof.recursive_proof {
             PoKStarProof::Recursive { .. } => {}

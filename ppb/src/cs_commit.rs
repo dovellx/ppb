@@ -1,7 +1,7 @@
 use num_bigint::{BigInt, BigUint, RandBigInt, ToBigInt};
 use num_traits::{One, Zero};
-use rand::rngs::OsRng;
 use rand::RngCore;
+use rand::rngs::OsRng;
 
 use crate::cs::CsCiphertext;
 use crate::df::DfParams;
@@ -154,11 +154,7 @@ fn apply_sign_mod_n2(x: &BigUint, sign: i8, n2: &BigUint) -> CryptoResult<BigUin
 /// 在 {-1, +1} 中均匀采样符号。
 fn sample_sign() -> i8 {
     let mut rng = OsRng;
-    if (rng.next_u32() & 1) == 0 {
-        -1
-    } else {
-        1
-    }
+    if (rng.next_u32() & 1) == 0 { -1 } else { 1 }
 }
 
 /// 统一的 Fiat-Shamir 挑战构造器。
@@ -306,8 +302,9 @@ fn fs_challenge_for_cs_enc(
 
 /// 将 BigUint 转换为 BigInt，统一处理转换失败错误。
 fn bu_to_bi(v: &BigUint) -> CryptoResult<BigInt> {
-    v.to_bigint()
-        .ok_or(CryptoError::InvalidInput("BigUint->BigInt conversion failed"))
+    v.to_bigint().ok_or(CryptoError::InvalidInput(
+        "BigUint->BigInt conversion failed",
+    ))
 }
 
 /// 检查符号是否属于 {-1, +1}。
@@ -324,7 +321,9 @@ fn mul_three_signs(a: i8, b: i8, c: i8) -> CryptoResult<i8> {
     match prod {
         -1 => Ok(-1),
         1 => Ok(1),
-        _ => Err(CryptoError::InvalidInput("invalid sign multiplication result")),
+        _ => Err(CryptoError::InvalidInput(
+            "invalid sign multiplication result",
+        )),
     }
 }
 
@@ -344,11 +343,7 @@ fn sign_pow_i8(sign: i8, exp: &BigInt) -> CryptoResult<i8> {
     }
 
     let is_even = (exp % BigInt::from(2u32)) == BigInt::zero();
-    if is_even {
-        Ok(1)
-    } else {
-        Ok(sign)
-    }
+    if is_even { Ok(1) } else { Ok(sign) }
 }
 
 /// 将符号位映射为模 n^2 的元素：+1 -> 1, -1 -> n^2-1。
@@ -368,16 +363,16 @@ fn div_mod_n2(num: &BigUint, den: &BigUint, n2: &BigUint) -> CryptoResult<BigUin
 /// 当 exp < 0 时，使用 base^{-1} 的正指数幂。
 fn modpow_signed(base: &BigUint, exp: &BigInt, modulus: &BigUint) -> CryptoResult<BigUint> {
     if exp >= &BigInt::zero() {
-        let exp_u = exp
-            .to_biguint()
-            .ok_or(CryptoError::InvalidInput("non-negative exponent conversion failed"))?;
+        let exp_u = exp.to_biguint().ok_or(CryptoError::InvalidInput(
+            "non-negative exponent conversion failed",
+        ))?;
         return Ok(base.modpow(&exp_u, modulus));
     }
 
     let inv = modinv(base, modulus)?;
-    let abs_exp = (-exp)
-        .to_biguint()
-        .ok_or(CryptoError::InvalidInput("negative exponent abs conversion failed"))?;
+    let abs_exp = (-exp).to_biguint().ok_or(CryptoError::InvalidInput(
+        "negative exponent abs conversion failed",
+    ))?;
     Ok(inv.modpow(&abs_exp, modulus))
 }
 
@@ -431,10 +426,14 @@ pub fn setup_cs_commit(
         return Err(CryptoError::InvalidInput("lambda_bits must be > 0"));
     }
     if params_cs.n2 != params_df.n2 {
-        return Err(CryptoError::InvalidInput("paramsCS.n2 must equal paramsDF.n2"));
+        return Err(CryptoError::InvalidInput(
+            "paramsCS.n2 must equal paramsDF.n2",
+        ));
     }
     if params_cs.n != params_df.n {
-        return Err(CryptoError::InvalidInput("paramsCS.n must equal paramsDF.n"));
+        return Err(CryptoError::InvalidInput(
+            "paramsCS.n must equal paramsDF.n",
+        ));
     }
 
     let n = params_cs.n.clone();
@@ -547,9 +546,13 @@ pub fn prove_cs_add(
     oc: &CsCommitOpening,
 ) -> CryptoResult<CsAddProof> {
     // 所有符号位必须是 ±1。
-    let all_signs = [oa.a1, oa.a2, oa.b1, oa.b2, ob.a1, ob.a2, ob.b1, ob.b2, oc.a1, oc.a2, oc.b1, oc.b2];
+    let all_signs = [
+        oa.a1, oa.a2, oa.b1, oa.b2, ob.a1, ob.a2, ob.b1, ob.b2, oc.a1, oc.a2, oc.b1, oc.b2,
+    ];
     if !all_signs.into_iter().all(is_pm_one) {
-        return Err(CryptoError::InvalidInput("all signs in openings must be in {-1,+1}"));
+        return Err(CryptoError::InvalidInput(
+            "all signs in openings must be in {-1,+1}",
+        ));
     }
 
     // 计算 D_i = Cc_i / (Ca_i * Cb_i)。
@@ -568,34 +571,42 @@ pub fn prove_cs_add(
     let beta4 = mul_three_signs(oc.b2, oa.b2, ob.b2)?;
 
     // 在进入 NIZK 前先检查见证是否真的满足四条关系。
-    let d1_expected = (sign_to_mod_element(beta1, &params.n2)? * modpow_signed(&params.g, &gamma1, &params.n2)?)
+    let d1_expected = (sign_to_mod_element(beta1, &params.n2)?
+        * modpow_signed(&params.g, &gamma1, &params.n2)?)
         % &params.n2;
     if d1_expected != d1 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy D1 relation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy D1 relation",
+        ));
     }
 
-    let d2_expected = (
-        sign_to_mod_element(beta2, &params.n2)?
-            * modpow_signed(&params.g_prime, &gamma1, &params.n2)?
-            * modpow_signed(&params.h_prime, &gamma2, &params.n2)?
-    ) % &params.n2;
+    let d2_expected = (sign_to_mod_element(beta2, &params.n2)?
+        * modpow_signed(&params.g_prime, &gamma1, &params.n2)?
+        * modpow_signed(&params.h_prime, &gamma2, &params.n2)?)
+        % &params.n2;
     if d2_expected != d2 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy D2 relation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy D2 relation",
+        ));
     }
 
-    let d3_expected = (sign_to_mod_element(beta3, &params.n2)? * modpow_signed(&params.g, &gamma3, &params.n2)?)
+    let d3_expected = (sign_to_mod_element(beta3, &params.n2)?
+        * modpow_signed(&params.g, &gamma3, &params.n2)?)
         % &params.n2;
     if d3_expected != d3 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy D3 relation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy D3 relation",
+        ));
     }
 
-    let d4_expected = (
-        sign_to_mod_element(beta4, &params.n2)?
-            * modpow_signed(&params.g_prime, &gamma3, &params.n2)?
-            * modpow_signed(&params.h_prime, &gamma4, &params.n2)?
-    ) % &params.n2;
+    let d4_expected = (sign_to_mod_element(beta4, &params.n2)?
+        * modpow_signed(&params.g_prime, &gamma3, &params.n2)?
+        * modpow_signed(&params.h_prime, &gamma4, &params.n2)?)
+        % &params.n2;
     if d4_expected != d4 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy D4 relation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy D4 relation",
+        ));
     }
 
     // ell = B + 2lambda。
@@ -666,18 +677,18 @@ pub fn verify_cs_add(
     let two_z4 = &proof.z4 * &two_bi;
 
     // 根据验证公式重构 R'_i。
-    let rp1 = (modpow_signed(&params.g, &two_z1, &params.n2)? * d1.modpow(&two_e, &params.n2)) % &params.n2;
-    let rp2 = (
-        modpow_signed(&params.g_prime, &two_z1, &params.n2)?
-            * modpow_signed(&params.h_prime, &two_z2, &params.n2)?
-            * d2.modpow(&two_e, &params.n2)
-    ) % &params.n2;
-    let rp3 = (modpow_signed(&params.g, &two_z3, &params.n2)? * d3.modpow(&two_e, &params.n2)) % &params.n2;
-    let rp4 = (
-        modpow_signed(&params.g_prime, &two_z3, &params.n2)?
-            * modpow_signed(&params.h_prime, &two_z4, &params.n2)?
-            * d4.modpow(&two_e, &params.n2)
-    ) % &params.n2;
+    let rp1 = (modpow_signed(&params.g, &two_z1, &params.n2)? * d1.modpow(&two_e, &params.n2))
+        % &params.n2;
+    let rp2 = (modpow_signed(&params.g_prime, &two_z1, &params.n2)?
+        * modpow_signed(&params.h_prime, &two_z2, &params.n2)?
+        * d2.modpow(&two_e, &params.n2))
+        % &params.n2;
+    let rp3 = (modpow_signed(&params.g, &two_z3, &params.n2)? * d3.modpow(&two_e, &params.n2))
+        % &params.n2;
+    let rp4 = (modpow_signed(&params.g_prime, &two_z3, &params.n2)?
+        * modpow_signed(&params.h_prime, &two_z4, &params.n2)?
+        * d4.modpow(&two_e, &params.n2))
+        % &params.n2;
 
     let e_prime = fs_challenge_for_cs_add(params, &d1, &d2, &d3, &d4, &rp1, &rp2, &rp3, &rp4);
     Ok(proof.e == e_prime)
@@ -709,18 +720,24 @@ pub fn prove_cs_com(
     }
 
     // 先验证见证与承诺一致，防止为错误语句输出“合法格式”证明。
-    let c2_unsigned =
-        (params.g_prime.modpow(&opening.s1, &params.n2) * params.h_prime.modpow(&opening.r1, &params.n2)) % &params.n2;
+    let c2_unsigned = (params.g_prime.modpow(&opening.s1, &params.n2)
+        * params.h_prime.modpow(&opening.r1, &params.n2))
+        % &params.n2;
     let c2_expected = apply_sign_mod_n2(&c2_unsigned, opening.b1, &params.n2)?;
     if c2_expected != commitment.c2 {
-        return Err(CryptoError::InvalidInput("opening does not satisfy C2 equation"));
+        return Err(CryptoError::InvalidInput(
+            "opening does not satisfy C2 equation",
+        ));
     }
 
-    let c4_unsigned =
-        (params.g_prime.modpow(&opening.s2, &params.n2) * params.h_prime.modpow(&opening.r2, &params.n2)) % &params.n2;
+    let c4_unsigned = (params.g_prime.modpow(&opening.s2, &params.n2)
+        * params.h_prime.modpow(&opening.r2, &params.n2))
+        % &params.n2;
     let c4_expected = apply_sign_mod_n2(&c4_unsigned, opening.b2, &params.n2)?;
     if c4_expected != commitment.c4 {
-        return Err(CryptoError::InvalidInput("opening does not satisfy C4 equation"));
+        return Err(CryptoError::InvalidInput(
+            "opening does not satisfy C4 equation",
+        ));
     }
 
     // 盲化必须覆盖 256 位 Fiat-Shamir 挑战 e：否则 z = k + e·w 的高位直接泄露开口 w，
@@ -736,8 +753,10 @@ pub fn prove_cs_com(
     let k_s2 = rng.gen_biguint(blind_bits_u64);
     let k_r2 = rng.gen_biguint(blind_bits_u64);
 
-    let r2 = (params.g_prime.modpow(&k_s1, &params.n2) * params.h_prime.modpow(&k_r1, &params.n2)) % &params.n2;
-    let r4 = (params.g_prime.modpow(&k_s2, &params.n2) * params.h_prime.modpow(&k_r2, &params.n2)) % &params.n2;
+    let r2 = (params.g_prime.modpow(&k_s1, &params.n2) * params.h_prime.modpow(&k_r1, &params.n2))
+        % &params.n2;
+    let r4 = (params.g_prime.modpow(&k_s2, &params.n2) * params.h_prime.modpow(&k_r2, &params.n2))
+        % &params.n2;
 
     // 2) Challenge 阶段：Fiat-Shamir 挑战。
     let e = fs_challenge_for_cs_com(params, commitment, &r2, &r4);
@@ -791,13 +810,17 @@ pub fn verify_cs_com(
     let two_z_s2 = &two * &proof.z_s2;
     let two_z_r2 = &two * &proof.z_r2;
 
-    let lhs_1 =
-        (params.g_prime.modpow(&two_z_s1, &params.n2) * params.h_prime.modpow(&two_z_r1, &params.n2)) % &params.n2;
-    let rhs_1 = (proof.r2.modpow(&two, &params.n2) * commitment.c2.modpow(&two_e, &params.n2)) % &params.n2;
+    let lhs_1 = (params.g_prime.modpow(&two_z_s1, &params.n2)
+        * params.h_prime.modpow(&two_z_r1, &params.n2))
+        % &params.n2;
+    let rhs_1 =
+        (proof.r2.modpow(&two, &params.n2) * commitment.c2.modpow(&two_e, &params.n2)) % &params.n2;
 
-    let lhs_2 =
-        (params.g_prime.modpow(&two_z_s2, &params.n2) * params.h_prime.modpow(&two_z_r2, &params.n2)) % &params.n2;
-    let rhs_2 = (proof.r4.modpow(&two, &params.n2) * commitment.c4.modpow(&two_e, &params.n2)) % &params.n2;
+    let lhs_2 = (params.g_prime.modpow(&two_z_s2, &params.n2)
+        * params.h_prime.modpow(&two_z_r2, &params.n2))
+        % &params.n2;
+    let rhs_2 =
+        (proof.r4.modpow(&two, &params.n2) * commitment.c4.modpow(&two_e, &params.n2)) % &params.n2;
 
     Ok(lhs_1 == rhs_1 && lhs_2 == rhs_2)
 }
@@ -908,7 +931,11 @@ pub fn prove_cs_com_ciphertext(
 
     // ---- 见证一致性自检：四条主等式都必须成立 ----
     // C1 = a1 · u · g^{s1}
-    let c1_expected = apply_sign_mod_n2(&((&u * params.g.modpow(&opening.s1, n2)) % n2), opening.a1, n2)?;
+    let c1_expected = apply_sign_mod_n2(
+        &((&u * params.g.modpow(&opening.s1, n2)) % n2),
+        opening.a1,
+        n2,
+    )?;
     // C2 = b1 · (g')^{s1} · (h')^{r1}
     let c2_expected = apply_sign_mod_n2(
         &((params.g_prime.modpow(&opening.s1, n2) * params.h_prime.modpow(&opening.r1, n2)) % n2),
@@ -916,7 +943,11 @@ pub fn prove_cs_com_ciphertext(
         n2,
     )?;
     // C3 = a2 · v · g^{s2}
-    let c3_expected = apply_sign_mod_n2(&((&v * params.g.modpow(&opening.s2, n2)) % n2), opening.a2, n2)?;
+    let c3_expected = apply_sign_mod_n2(
+        &((&v * params.g.modpow(&opening.s2, n2)) % n2),
+        opening.a2,
+        n2,
+    )?;
     // C4 = b2 · (g')^{s2} · (h')^{r2}
     let c4_expected = apply_sign_mod_n2(
         &((params.g_prime.modpow(&opening.s2, n2) * params.h_prime.modpow(&opening.r2, n2)) % n2),
@@ -992,12 +1023,15 @@ pub fn verify_cs_com_ciphertext(
     let v = &x0.c1 % n2;
     // u,v 必须是 Z*_{n^2} 单位元，否则 u^2/v^2 不可逆（诚实密文分量落在 |QR_{n^2}|，
     // 必然与 n^2 互素；这里对畸形输入直接判否，而不是抛错）。
-    if gcd(u.clone(), n2.clone()) != BigUint::one() || gcd(v.clone(), n2.clone()) != BigUint::one() {
+    if gcd(u.clone(), n2.clone()) != BigUint::one() || gcd(v.clone(), n2.clone()) != BigUint::one()
+    {
         return Ok(false);
     }
 
     let two = BigUint::from(2u32);
-    let e = fs_challenge_for_cs_com_ct(params, commitment, &u, &v, &proof.r1, &proof.r2, &proof.r3, &proof.r4);
+    let e = fs_challenge_for_cs_com_ct(
+        params, commitment, &u, &v, &proof.r1, &proof.r2, &proof.r3, &proof.r4,
+    );
     let two_e = &two * &e;
 
     // A1 = C1^2 / u^2 = g^{2 s1}; A3 = C3^2 / v^2 = g^{2 s2}
@@ -1068,27 +1102,35 @@ pub fn prove_cs_mult(
     let beta3 = div_two_signs(oa.a2, ob_a2_pow_y)?;
     let beta4 = div_two_signs(oa.b2, ob_b2_pow_y)?;
     if [beta1, beta2, beta3, beta4] != b {
-        return Err(CryptoError::InvalidInput("input b_i do not match signs derived from Oa/Ob"));
+        return Err(CryptoError::InvalidInput(
+            "input b_i do not match signs derived from Oa/Ob",
+        ));
     }
 
     // 3) 检查 Cy 与四个主等式关系，防止无效实例生成证明。
     let cy_expected = apply_sign_mod_n2(
-        &((modpow_signed(&params.g_prime, y, &params.n2)? * modpow_signed(&params.h_prime, r_y, &params.n2)?)
+        &((modpow_signed(&params.g_prime, y, &params.n2)?
+            * modpow_signed(&params.h_prime, r_y, &params.n2)?)
             % &params.n2),
         b_y,
         &params.n2,
     )?;
     if &cy_expected != cy {
-        return Err(CryptoError::InvalidInput("witness does not satisfy Cy equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy Cy equation",
+        ));
     }
 
     let ca1_expected = apply_sign_mod_n2(
-        &((modpow_signed(&cb.c1, y, &params.n2)? * modpow_signed(&params.g, &gamma1, &params.n2)?) % &params.n2),
+        &((modpow_signed(&cb.c1, y, &params.n2)? * modpow_signed(&params.g, &gamma1, &params.n2)?)
+            % &params.n2),
         b[0],
         &params.n2,
     )?;
     if ca1_expected != ca.c1 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy Ca1 equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy Ca1 equation",
+        ));
     }
 
     let ca2_expected = apply_sign_mod_n2(
@@ -1100,16 +1142,21 @@ pub fn prove_cs_mult(
         &params.n2,
     )?;
     if ca2_expected != ca.c2 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy Ca2 equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy Ca2 equation",
+        ));
     }
 
     let ca3_expected = apply_sign_mod_n2(
-        &((modpow_signed(&cb.c3, y, &params.n2)? * modpow_signed(&params.g, &gamma3, &params.n2)?) % &params.n2),
+        &((modpow_signed(&cb.c3, y, &params.n2)? * modpow_signed(&params.g, &gamma3, &params.n2)?)
+            % &params.n2),
         b[2],
         &params.n2,
     )?;
     if ca3_expected != ca.c3 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy Ca3 equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy Ca3 equation",
+        ));
     }
 
     let ca4_expected = apply_sign_mod_n2(
@@ -1121,7 +1168,9 @@ pub fn prove_cs_mult(
         &params.n2,
     )?;
     if ca4_expected != ca.c4 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy Ca4 equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy Ca4 equation",
+        ));
     }
 
     // 4) 盲化采样参数：ell = B + 2lambda + lambda_c。
@@ -1139,14 +1188,16 @@ pub fn prove_cs_mult(
     let r_y_elem = (modpow_signed(&params.g_prime, &k_y, &params.n2)?
         * modpow_signed(&params.h_prime, &k_ry, &params.n2)?)
         % &params.n2;
-    let r1 =
-        (modpow_signed(&cb.c1, &k_y, &params.n2)? * modpow_signed(&params.g, &k1, &params.n2)?) % &params.n2;
+    let r1 = (modpow_signed(&cb.c1, &k_y, &params.n2)?
+        * modpow_signed(&params.g, &k1, &params.n2)?)
+        % &params.n2;
     let r2 = (modpow_signed(&cb.c2, &k_y, &params.n2)?
         * modpow_signed(&params.g_prime, &k1, &params.n2)?
         * modpow_signed(&params.h_prime, &k2, &params.n2)?)
         % &params.n2;
-    let r3 =
-        (modpow_signed(&cb.c3, &k_y, &params.n2)? * modpow_signed(&params.g, &k3, &params.n2)?) % &params.n2;
+    let r3 = (modpow_signed(&cb.c3, &k_y, &params.n2)?
+        * modpow_signed(&params.g, &k3, &params.n2)?)
+        % &params.n2;
     let r4 = (modpow_signed(&cb.c4, &k_y, &params.n2)?
         * modpow_signed(&params.g_prime, &k3, &params.n2)?
         * modpow_signed(&params.h_prime, &k4, &params.n2)?)
@@ -1196,15 +1247,7 @@ pub fn verify_cs_mult(
     }
 
     let e = fs_challenge_for_cs_mult(
-        params,
-        ca,
-        cb,
-        cy,
-        &proof.r_y,
-        &proof.r1,
-        &proof.r2,
-        &proof.r3,
-        &proof.r4,
+        params, ca, cb, cy, &proof.r_y, &proof.r1, &proof.r2, &proof.r3, &proof.r4,
     );
     let two = BigUint::from(2u32);
     let two_e = &two * &e;
@@ -1222,8 +1265,9 @@ pub fn verify_cs_mult(
         % &params.n2;
     let rhs_y = (proof.r_y.modpow(&two, &params.n2) * cy.modpow(&two_e, &params.n2)) % &params.n2;
 
-    let lhs_1 =
-        (modpow_signed(&cb.c1, &two_z_y, &params.n2)? * modpow_signed(&params.g, &two_z1, &params.n2)?) % &params.n2;
+    let lhs_1 = (modpow_signed(&cb.c1, &two_z_y, &params.n2)?
+        * modpow_signed(&params.g, &two_z1, &params.n2)?)
+        % &params.n2;
     let rhs_1 = (proof.r1.modpow(&two, &params.n2) * ca.c1.modpow(&two_e, &params.n2)) % &params.n2;
 
     let lhs_2 = (modpow_signed(&cb.c2, &two_z_y, &params.n2)?
@@ -1232,8 +1276,9 @@ pub fn verify_cs_mult(
         % &params.n2;
     let rhs_2 = (proof.r2.modpow(&two, &params.n2) * ca.c2.modpow(&two_e, &params.n2)) % &params.n2;
 
-    let lhs_3 =
-        (modpow_signed(&cb.c3, &two_z_y, &params.n2)? * modpow_signed(&params.g, &two_z3, &params.n2)?) % &params.n2;
+    let lhs_3 = (modpow_signed(&cb.c3, &two_z_y, &params.n2)?
+        * modpow_signed(&params.g, &two_z3, &params.n2)?)
+        % &params.n2;
     let rhs_3 = (proof.r3.modpow(&two, &params.n2) * ca.c3.modpow(&two_e, &params.n2)) % &params.n2;
 
     let lhs_4 = (modpow_signed(&cb.c4, &two_z_y, &params.n2)?
@@ -1271,37 +1316,48 @@ pub fn prove_cs_enc(
         return Err(CryptoError::InvalidInput("b_y and b_i must be in {-1,+1}"));
     }
     if [oa.a1, oa.b1, oa.a2, oa.b2] != b {
-        return Err(CryptoError::InvalidInput("input b_i do not match signs from Oa"));
+        return Err(CryptoError::InvalidInput(
+            "input b_i do not match signs from Oa",
+        ));
     }
 
     // 先检查见证与公共语句的一致性。
     let cy_expected = apply_sign_mod_n2(
-        &((modpow_signed(&params.g_prime, y, &params.n2)? * modpow_signed(&params.h_prime, r_y, &params.n2)?)
+        &((modpow_signed(&params.g_prime, y, &params.n2)?
+            * modpow_signed(&params.h_prime, r_y, &params.n2)?)
             % &params.n2),
         b_y,
         &params.n2,
     )?;
     if &cy_expected != cy {
-        return Err(CryptoError::InvalidInput("witness does not satisfy Cy equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy Cy equation",
+        ));
     }
 
     let ca1_expected = apply_sign_mod_n2(
-        &((modpow_signed(&params.g_star, r_a, &params.n2)? * params.g_prime.modpow(&oa.s1, &params.n2))
+        &((modpow_signed(&params.g_star, r_a, &params.n2)?
+            * params.g_prime.modpow(&oa.s1, &params.n2))
             % &params.n2),
         b[0],
         &params.n2,
     )?;
     if ca1_expected != ca.c1 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy Ca1 equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy Ca1 equation",
+        ));
     }
 
     let ca2_expected = apply_sign_mod_n2(
-        &((params.g_prime.modpow(&oa.s1, &params.n2) * params.h_prime.modpow(&oa.r1, &params.n2)) % &params.n2),
+        &((params.g_prime.modpow(&oa.s1, &params.n2) * params.h_prime.modpow(&oa.r1, &params.n2))
+            % &params.n2),
         b[1],
         &params.n2,
     )?;
     if ca2_expected != ca.c2 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy Ca2 equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy Ca2 equation",
+        ));
     }
 
     let ca3_expected = apply_sign_mod_n2(
@@ -1313,16 +1369,21 @@ pub fn prove_cs_enc(
         &params.n2,
     )?;
     if ca3_expected != ca.c3 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy Ca3 equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy Ca3 equation",
+        ));
     }
 
     let ca4_expected = apply_sign_mod_n2(
-        &((params.g_prime.modpow(&oa.s2, &params.n2) * params.h_prime.modpow(&oa.r2, &params.n2)) % &params.n2),
+        &((params.g_prime.modpow(&oa.s2, &params.n2) * params.h_prime.modpow(&oa.r2, &params.n2))
+            % &params.n2),
         b[3],
         &params.n2,
     )?;
     if ca4_expected != ca.c4 {
-        return Err(CryptoError::InvalidInput("witness does not satisfy Ca4 equation"));
+        return Err(CryptoError::InvalidInput(
+            "witness does not satisfy Ca4 equation",
+        ));
     }
 
     // 盲化位长：ell = B + 2lambda + lambda_c。
@@ -1400,7 +1461,9 @@ pub fn verify_cs_enc(
         return Err(CryptoError::InvalidInput("n^2 must be non-zero"));
     }
 
-    let e = fs_challenge_for_cs_enc(params, k, ca, cy, &proof.r_y, &proof.r1, &proof.r2, &proof.r3, &proof.r4);
+    let e = fs_challenge_for_cs_enc(
+        params, k, ca, cy, &proof.r_y, &proof.r1, &proof.r2, &proof.r3, &proof.r4,
+    );
     let two = BigUint::from(2u32);
     let two_e = &two * &e;
 
@@ -1488,7 +1551,8 @@ mod tests {
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
 
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
         assert_eq!(params.n, cs_params.n);
         assert_eq!(params.n2, cs_params.n2);
         assert_eq!(params.g_star, cs_params.g);
@@ -1521,7 +1585,8 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let opening = CsCommitOpening {
             a1: 1,
@@ -1534,8 +1599,10 @@ mod tests {
             b2: 1,
         };
 
-        let manual = commit_cs_with_opening(&params, &ct, &opening).expect("manual commit should succeed");
-        let manual_again = commit_cs_with_opening(&params, &ct, &opening).expect("manual commit should succeed");
+        let manual =
+            commit_cs_with_opening(&params, &ct, &opening).expect("manual commit should succeed");
+        let manual_again =
+            commit_cs_with_opening(&params, &ct, &opening).expect("manual commit should succeed");
         assert_eq!(manual.c1, manual_again.c1);
         assert_eq!(manual.c2, manual_again.c2);
         assert_eq!(manual.c3, manual_again.c3);
@@ -1551,34 +1618,37 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
         let m = BigUint::from(9u32);
         let ct = enc_cs(&cs_params, &pk, &m).expect("enc should succeed");
         let committed = commit_cs(&params, &ct, 96).expect("commit cs should succeed");
 
-        let proof =
-            prove_cs_com(&params, &committed.commitment, &committed.opening).expect("prove cs com should succeed");
+        let proof = prove_cs_com(&params, &committed.commitment, &committed.opening)
+            .expect("prove cs com should succeed");
 
         // 使用与 prove 相同 transcript 重新计算挑战，检查响应是否满足线性关系。
         let e = fs_challenge_for_cs_com(&params, &committed.commitment, &proof.r2, &proof.r4);
 
         // 还原无符号基项：若 C2 = -U，则再次乘以 -1 可得到 U。
-        let c2_unsigned = apply_sign_mod_n2(&committed.commitment.c2, committed.opening.b1, &params.n2)
-            .expect("valid sign");
-        let c4_unsigned = apply_sign_mod_n2(&committed.commitment.c4, committed.opening.b2, &params.n2)
-            .expect("valid sign");
+        let c2_unsigned =
+            apply_sign_mod_n2(&committed.commitment.c2, committed.opening.b1, &params.n2)
+                .expect("valid sign");
+        let c4_unsigned =
+            apply_sign_mod_n2(&committed.commitment.c4, committed.opening.b2, &params.n2)
+                .expect("valid sign");
 
-        let lhs2 =
-            (params.g_prime.modpow(&proof.z_s1, &params.n2) * params.h_prime.modpow(&proof.z_r1, &params.n2))
-                % &params.n2;
+        let lhs2 = (params.g_prime.modpow(&proof.z_s1, &params.n2)
+            * params.h_prime.modpow(&proof.z_r1, &params.n2))
+            % &params.n2;
         let rhs2 = (&proof.r2 * c2_unsigned.modpow(&e, &params.n2)) % &params.n2;
         assert_eq!(lhs2, rhs2);
 
-        let lhs4 =
-            (params.g_prime.modpow(&proof.z_s2, &params.n2) * params.h_prime.modpow(&proof.z_r2, &params.n2))
-                % &params.n2;
+        let lhs4 = (params.g_prime.modpow(&proof.z_s2, &params.n2)
+            * params.h_prime.modpow(&proof.z_r2, &params.n2))
+            % &params.n2;
         let rhs4 = (&proof.r4 * c4_unsigned.modpow(&e, &params.n2)) % &params.n2;
         assert_eq!(lhs4, rhs4);
     }
@@ -1592,15 +1662,16 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
         let m = BigUint::from(11u32);
         let ct = enc_cs(&cs_params, &pk, &m).expect("enc should succeed");
         let committed = commit_cs(&params, &ct, 96).expect("commit cs should succeed");
 
-        let proof =
-            prove_cs_com(&params, &committed.commitment, &committed.opening).expect("prove cs com should succeed");
+        let proof = prove_cs_com(&params, &committed.commitment, &committed.opening)
+            .expect("prove cs com should succeed");
 
         let ok = verify_cs_com(&params, &committed.commitment, &proof).expect("verify should run");
         assert!(ok);
@@ -1619,7 +1690,8 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
 
@@ -1627,8 +1699,9 @@ mod tests {
         let x0 = enc_cs(&cs_params, &pk, &BigUint::from(11u32)).expect("enc x0 should succeed");
         let committed = commit_cs(&params, &x0, 96).expect("commit cs should succeed");
 
-        let proof = prove_cs_com_ciphertext(&params, &committed.commitment, &x0, &committed.opening)
-            .expect("prove cs com ciphertext should succeed");
+        let proof =
+            prove_cs_com_ciphertext(&params, &committed.commitment, &x0, &committed.opening)
+                .expect("prove cs com ciphertext should succeed");
 
         // 正例：对 x0 验证通过。
         let ok = verify_cs_com_ciphertext(&params, &committed.commitment, &x0, &proof)
@@ -1636,7 +1709,8 @@ mod tests {
         assert!(ok);
 
         // 反例：换成另一条公开密文 x0'（消息不同），验证必须拒绝。
-        let x0_prime = enc_cs(&cs_params, &pk, &BigUint::from(12u32)).expect("enc x0' should succeed");
+        let x0_prime =
+            enc_cs(&cs_params, &pk, &BigUint::from(12u32)).expect("enc x0' should succeed");
         assert_ne!(x0.c0, x0_prime.c0);
         let rejected = verify_cs_com_ciphertext(&params, &committed.commitment, &x0_prime, &proof)
             .expect("verify should run");
@@ -1652,15 +1726,16 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
         let m = BigUint::from(13u32);
         let ct = enc_cs(&cs_params, &pk, &m).expect("enc should succeed");
         let committed = commit_cs(&params, &ct, 96).expect("commit cs should succeed");
 
-        let mut proof =
-            prove_cs_com(&params, &committed.commitment, &committed.opening).expect("prove cs com should succeed");
+        let mut proof = prove_cs_com(&params, &committed.commitment, &committed.opening)
+            .expect("prove cs com should succeed");
 
         proof.z_s1 += BigUint::from(1u32);
         let ok = verify_cs_com(&params, &committed.commitment, &proof).expect("verify should run");
@@ -1676,7 +1751,8 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
         let cta = enc_cs(&cs_params, &pk, &BigUint::from(3u32)).expect("enc a should succeed");
@@ -1769,7 +1845,8 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
         let cta = enc_cs(&cs_params, &pk, &BigUint::from(2u32)).expect("enc a should succeed");
@@ -1862,7 +1939,8 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
         let ctb = enc_cs(&cs_params, &pk, &BigUint::from(6u32)).expect("enc b should succeed");
@@ -1957,7 +2035,8 @@ mod tests {
         )
         .expect("prove mult should succeed");
 
-        let ok = verify_cs_mult(&params, &ca, &wb.commitment, &cy, &proof).expect("verify mult should run");
+        let ok = verify_cs_mult(&params, &ca, &wb.commitment, &cy, &proof)
+            .expect("verify mult should run");
         assert!(ok);
     }
 
@@ -1970,7 +2049,8 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
         let ctb = enc_cs(&cs_params, &pk, &BigUint::from(8u32)).expect("enc b should succeed");
@@ -2066,7 +2146,8 @@ mod tests {
         .expect("prove mult should succeed");
         proof.z1 += BigInt::from(1u32);
 
-        let ok = verify_cs_mult(&params, &ca, &wb.commitment, &cy, &proof).expect("verify mult should run");
+        let ok = verify_cs_mult(&params, &ca, &wb.commitment, &cy, &proof)
+            .expect("verify mult should run");
         assert!(!ok);
     }
 
@@ -2079,7 +2160,8 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
         let y = BigInt::from(5u32);
@@ -2118,7 +2200,8 @@ mod tests {
             )
             .expect("ca1"),
             c2: apply_sign_mod_n2(
-                &((params.g_prime.modpow(&oa.s1, &params.n2) * params.h_prime.modpow(&oa.r1, &params.n2))
+                &((params.g_prime.modpow(&oa.s1, &params.n2)
+                    * params.h_prime.modpow(&oa.r1, &params.n2))
                     % &params.n2),
                 b[1],
                 &params.n2,
@@ -2134,7 +2217,8 @@ mod tests {
             )
             .expect("ca3"),
             c4: apply_sign_mod_n2(
-                &((params.g_prime.modpow(&oa.s2, &params.n2) * params.h_prime.modpow(&oa.r2, &params.n2))
+                &((params.g_prime.modpow(&oa.s2, &params.n2)
+                    * params.h_prime.modpow(&oa.r2, &params.n2))
                     % &params.n2),
                 b[3],
                 &params.n2,
@@ -2157,7 +2241,8 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
 
         let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
         let y = BigInt::from(3u32);
@@ -2196,7 +2281,8 @@ mod tests {
             )
             .expect("ca1"),
             c2: apply_sign_mod_n2(
-                &((params.g_prime.modpow(&oa.s1, &params.n2) * params.h_prime.modpow(&oa.r1, &params.n2))
+                &((params.g_prime.modpow(&oa.s1, &params.n2)
+                    * params.h_prime.modpow(&oa.r1, &params.n2))
                     % &params.n2),
                 b[1],
                 &params.n2,
@@ -2212,7 +2298,8 @@ mod tests {
             )
             .expect("ca3"),
             c4: apply_sign_mod_n2(
-                &((params.g_prime.modpow(&oa.s2, &params.n2) * params.h_prime.modpow(&oa.r2, &params.n2))
+                &((params.g_prime.modpow(&oa.s2, &params.n2)
+                    * params.h_prime.modpow(&oa.r2, &params.n2))
                     % &params.n2),
                 b[3],
                 &params.n2,
@@ -2237,7 +2324,8 @@ mod tests {
             g: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
             h: sample_unit_mod_n2(&mut OsRng, &cs_params.n2),
         };
-        let params = setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
+        let params =
+            setup_cs_commit(40, &cs_params, &df_params).expect("setup cs commit should succeed");
         let (pk, _sk) = keygen_cs(&cs_params).expect("keygen should succeed");
 
         let ca = CsCommitment {
@@ -2270,7 +2358,10 @@ mod tests {
             [1, 1, 1, 1],
         )
         .expect_err("invalid sign should be rejected");
-        assert_eq!(err, CryptoError::InvalidInput("b_y and b_i must be in {-1,+1}"));
+        assert_eq!(
+            err,
+            CryptoError::InvalidInput("b_y and b_i must be in {-1,+1}")
+        );
     }
 
     fn ob_sign(v: i8) -> i8 {

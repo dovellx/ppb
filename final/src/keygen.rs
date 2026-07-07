@@ -11,13 +11,13 @@
 
 use num_bigint::BigUint;
 
-use rust::{keygen_ppb, HecFunctionKey};
 use mercurial_signature::PublicKey as MsPublicKey;
 use mercurial_signature::SecretKey as MsSecretKey;
+use rust::{HecFunctionKey, keygen_ppb};
 
 use crate::commit::{self, PolyCommitment};
 use crate::setup::Lambda;
-use crate::types::{split_watchlist, WatchlistCommitments};
+use crate::types::{WatchlistCommitments, split_watchlist};
 
 /// 公钥 pk_Λ = (pk_Λ1, pk_Λ2, pk_SPS)。
 ///
@@ -88,15 +88,15 @@ pub fn keygen(
         // Step 11: (pk_Λ1, sk_Λ1) ← BLUE.KeyGen(Λ_BLUE, x1, r_x1; s1)
         // ============================================================
         let fk1 = HecFunctionKey { n: x1.len(), k: 1 };
-        let (pk1, sk1) = keygen_ppb(&lambda.lambda_blue, &fk1, x1, r_x1, s1)
-            .expect("BLUE.KeyGen for x1 failed");
+        let (pk1, sk1) =
+            keygen_ppb(&lambda.lambda_blue, &fk1, x1, r_x1, s1).expect("BLUE.KeyGen for x1 failed");
 
         // ============================================================
         // Step 12: (pk_Λ2, sk_Λ2) ← BLUE.KeyGen(Λ_BLUE, x2, r_x2; s2)
         // ============================================================
         let fk2 = HecFunctionKey { n: x2.len(), k: 1 };
-        let (pk2, sk2) = keygen_ppb(&lambda.lambda_blue, &fk2, x2, r_x2, s2)
-            .expect("BLUE.KeyGen for x2 failed");
+        let (pk2, sk2) =
+            keygen_ppb(&lambda.lambda_blue, &fk2, x2, r_x2, s2).expect("BLUE.KeyGen for x2 failed");
 
         // ============================================================
         // Step 13: pk_SPS, sk_SPS ← SPS.KGen(pp)
@@ -152,8 +152,8 @@ pub fn keygen(
         // ============================================================
         let x2 = split.remainder;
         let fk2 = HecFunctionKey { n: x2.len(), k: 1 };
-        let (pk2, sk2) = keygen_ppb(&lambda.lambda_blue, &fk2, x2, r_x2, s2)
-            .expect("BLUE.KeyGen for x failed");
+        let (pk2, sk2) =
+            keygen_ppb(&lambda.lambda_blue, &fk2, x2, r_x2, s2).expect("BLUE.KeyGen for x failed");
 
         // ============================================================
         // Step 21: C_x2 = Commit(Λ, x, r_x2; s2)
@@ -198,8 +198,7 @@ mod tests {
     fn test_lambda() -> Lambda {
         let lambda_bits = 64;
         let t = 3;
-        let cpar_star = rust::setup_pedersen(lambda_bits)
-            .expect("setup_pedersen should succeed");
+        let cpar_star = rust::setup_pedersen(lambda_bits).expect("setup_pedersen should succeed");
         crate::setup::setup(lambda_bits, t, cpar_star)
     }
 
@@ -232,7 +231,11 @@ mod tests {
     #[test]
     fn test_list_equal_to_t_uses_small_branch() {
         let lambda = test_lambda();
-        let x = vec![BigUint::from(1u32), BigUint::from(2u32), BigUint::from(3u32)];
+        let x = vec![
+            BigUint::from(1u32),
+            BigUint::from(2u32),
+            BigUint::from(3u32),
+        ];
         let r_x = vec![BigUint::from(10u32), BigUint::from(20u32)];
         let s = vec![BigUint::from(1u32), BigUint::from(2u32)];
 

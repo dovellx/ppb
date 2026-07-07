@@ -16,8 +16,8 @@ use num_bigint::BigUint;
 use rust::PpbDecProof;
 
 use crate::commit::PolyCommitment;
-use crate::escrow2::Escrow2Output;
 use crate::escrow_verify::escrow_verify;
+use crate::escrow2::Escrow2Output;
 use crate::keygen::PublicKey;
 use crate::setup::Lambda;
 use crate::verpk::ver_pk;
@@ -137,15 +137,7 @@ pub fn judgement(
     // - Z2 → z.z2 (escrow output for second half)
     // - z → z_dec (decrypted result from Dec)
     // - πz → pi_z (PoKS3 proof from Dec)
-    match rust::judge_ppb(
-        &lambda.lambda_blue,
-        &pk.pk2,
-        cx2,
-        cy2,
-        &z.z2,
-        z_dec,
-        pi_z,
-    ) {
+    match rust::judge_ppb(&lambda.lambda_blue, &pk.pk2, cx2, cy2, &z.z2, z_dec, pi_z) {
         Ok(true) => {
             // ============================================================
             // Step 6: return 1
@@ -176,8 +168,7 @@ mod tests {
     fn test_lambda() -> Lambda {
         let lambda_bits = 64;
         let t = 3;
-        let cpar_star = rust::setup_pedersen(lambda_bits)
-            .expect("setup_pedersen should succeed");
+        let cpar_star = rust::setup_pedersen(lambda_bits).expect("setup_pedersen should succeed");
         crate::setup::setup(lambda_bits, t, cpar_star)
     }
 
@@ -212,7 +203,8 @@ mod tests {
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
-        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
+        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         // Escrow2 (y_id=4 ∈ x2=[4])
@@ -222,14 +214,12 @@ mod tests {
             y_at: BigUint::from(7u32),
         };
         let r_y2 = BigUint::from(67u32);
-        let z = crate::escrow2::escrow2(
-            &lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y,
-        )
-        .expect("Escrow2 should succeed");
+        let z =
+            crate::escrow2::escrow2(&lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y)
+                .expect("Escrow2 should succeed");
 
         // Dec: decrypt and generate PoKS3 proof
-        let dec_out = dec::dec(&lambda, &pk, &sk, &z.c_y2, &z)
-            .expect("Dec should succeed");
+        let dec_out = dec::dec(&lambda, &pk, &sk, &z.c_y2, &z).expect("Dec should succeed");
 
         // Judgement: all three checks should pass
         assert!(
@@ -265,12 +255,9 @@ mod tests {
         let r_star_y1 = BigUint::from(53u32);
 
         // ℓ ≤ t: escrow2 uses placeholder signature (pkΛ1 = ⊥ branch)
-        let c_star_y1_placeholder = rust::com_pedersen(
-            &lambda.cpar_star,
-            &BigUint::from(0u32),
-            &r_star_y1,
-        )
-        .expect("Pedersen commitment failed");
+        let c_star_y1_placeholder =
+            rust::com_pedersen(&lambda.cpar_star, &BigUint::from(0u32), &r_star_y1)
+                .expect("Pedersen commitment failed");
 
         let fake_sig = {
             let mut rng = ark_std::rand::rngs::OsRng;
@@ -281,14 +268,19 @@ mod tests {
         };
 
         let z = crate::escrow2::escrow2(
-            &lambda, &pk, &y, &r_star_y1, &r_y2,
-            &c_star_y1_placeholder, &fake_sig,
+            &lambda,
+            &pk,
+            &y,
+            &r_star_y1,
+            &r_y2,
+            &c_star_y1_placeholder,
+            &fake_sig,
         )
         .expect("Escrow2 should succeed for small list");
 
         // Dec
-        let dec_out = dec::dec(&lambda, &pk, &sk, &z.c_y2, &z)
-            .expect("Dec should succeed for small list");
+        let dec_out =
+            dec::dec(&lambda, &pk, &sk, &z.c_y2, &z).expect("Dec should succeed for small list");
 
         // Judgement should return true
         assert!(
@@ -324,7 +316,8 @@ mod tests {
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
-        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
+        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         // Escrow2
@@ -333,14 +326,12 @@ mod tests {
             y_at: BigUint::from(7u32),
         };
         let r_y2 = BigUint::from(67u32);
-        let z = crate::escrow2::escrow2(
-            &lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y,
-        )
-        .expect("Escrow2 should succeed");
+        let z =
+            crate::escrow2::escrow2(&lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y)
+                .expect("Escrow2 should succeed");
 
         // Dec
-        let dec_out = dec::dec(&lambda, &pk, &sk, &z.c_y2, &z)
-            .expect("Dec should succeed");
+        let dec_out = dec::dec(&lambda, &pk, &sk, &z.c_y2, &z).expect("Dec should succeed");
 
         // Tamper Cx2: modify the commitment value
         let cx2 = c_x[1].as_mut().unwrap();
@@ -380,7 +371,8 @@ mod tests {
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
-        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
+        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         // Escrow2
@@ -389,21 +381,27 @@ mod tests {
             y_at: BigUint::from(7u32),
         };
         let r_y2 = BigUint::from(67u32);
-        let z = crate::escrow2::escrow2(
-            &lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y,
-        )
-        .expect("Escrow2 should succeed");
+        let z =
+            crate::escrow2::escrow2(&lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y)
+                .expect("Escrow2 should succeed");
 
         // Dec
-        let dec_out = dec::dec(&lambda, &pk, &sk, &z.c_y2, &z)
-            .expect("Dec should succeed");
+        let dec_out = dec::dec(&lambda, &pk, &sk, &z.c_y2, &z).expect("Dec should succeed");
 
         // Tamper Cy2: modify the commitment value
         let tampered_cy2 = (&z.c_y2 + BigUint::from(1u32)) % &lambda.cpar.n2;
 
         // Judgement should fail because VerEscrow will detect the tampered Cy2
         assert!(
-            !judgement(&lambda, &pk, &c_x, &tampered_cy2, &z, &dec_out.ft, &dec_out.pi_z),
+            !judgement(
+                &lambda,
+                &pk,
+                &c_x,
+                &tampered_cy2,
+                &z,
+                &dec_out.ft,
+                &dec_out.pi_z
+            ),
             "Judgement should return false when Cy2 is tampered"
         );
     }
@@ -435,7 +433,8 @@ mod tests {
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
-        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
+        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         // Escrow2
@@ -444,14 +443,12 @@ mod tests {
             y_at: BigUint::from(7u32),
         };
         let r_y2 = BigUint::from(67u32);
-        let z = crate::escrow2::escrow2(
-            &lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y,
-        )
-        .expect("Escrow2 should succeed");
+        let z =
+            crate::escrow2::escrow2(&lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y)
+                .expect("Escrow2 should succeed");
 
         // Dec
-        let dec_out = dec::dec(&lambda, &pk, &sk, &z.c_y2, &z)
-            .expect("Dec should succeed");
+        let dec_out = dec::dec(&lambda, &pk, &sk, &z.c_y2, &z).expect("Dec should succeed");
 
         // Tamper πz: modify the PoKS3 proof response
         let mut tampered_pi_z = dec_out.pi_z.clone();
@@ -491,7 +488,8 @@ mod tests {
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
-        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
+        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         let y_dec = rust::HecEvalInput {
@@ -499,13 +497,11 @@ mod tests {
             y_at: BigUint::from(7u32),
         };
         let r_y2 = BigUint::from(67u32);
-        let z = crate::escrow2::escrow2(
-            &lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y,
-        )
-        .expect("Escrow2 should succeed");
+        let z =
+            crate::escrow2::escrow2(&lambda, &pk, &y_dec, &r_star_y1, &r_y2, c_star_y1, sigma_y)
+                .expect("Escrow2 should succeed");
 
-        let dec_out = dec::dec(&lambda, &pk, &sk, &z.c_y2, &z)
-            .expect("Dec should succeed");
+        let dec_out = dec::dec(&lambda, &pk, &sk, &z.c_y2, &z).expect("Dec should succeed");
 
         // Generate a different key pair (for a different list)
         let x_wrong: Vec<BigUint> = (1..=8).map(|i| BigUint::from(i as u32)).collect();
@@ -513,7 +509,15 @@ mod tests {
 
         // Judgement should fail because pk_wrong is not consistent with c_x
         assert!(
-            !judgement(&lambda, &pk_wrong, &c_x, &z.c_y2, &z, &dec_out.ft, &dec_out.pi_z),
+            !judgement(
+                &lambda,
+                &pk_wrong,
+                &c_x,
+                &z.c_y2,
+                &z,
+                &dec_out.ft,
+                &dec_out.pi_z
+            ),
             "Judgement should return false when using wrong public key"
         );
     }

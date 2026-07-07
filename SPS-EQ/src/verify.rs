@@ -1,4 +1,4 @@
-use ark_ec::{pairing::Pairing, PrimeGroup};
+use ark_ec::{PrimeGroup, pairing::Pairing};
 use ark_ff::{Field, UniformRand, Zero};
 use ark_std::rand::RngCore;
 
@@ -10,19 +10,18 @@ impl<G: Pairing> PublicKey<G> {
         if msg.len() > self.capacity {
             panic!("The message is too long.");
         }
-        
+
         let lhs = G::multi_pairing(msg.iter(), self.points.iter());
         let rhs = G::pairing(&sig.z, &sig.yp);
         if lhs != rhs {
             return false;
         }
-        
+
         let lhs = G::pairing(&sig.y, &G::G2::generator());
         let rhs = G::pairing(&G::G1::generator(), &sig.yp);
         if lhs != rhs {
             return false;
-        }
-        else {
+        } else {
             return true;
         }
     }
@@ -49,8 +48,13 @@ impl<G: Pairing> PublicKey<G> {
 }
 
 impl<G: Pairing> Signature<G> {
-    pub fn chg_rep<R: RngCore>(&self, msg: &Vec<G::G1>, pk: &PublicKey<G>, mu: G::ScalarField, rng: &mut R) -> (Signature<G>, Vec<G::G1>) {
-
+    pub fn chg_rep<R: RngCore>(
+        &self,
+        msg: &Vec<G::G1>,
+        pk: &PublicKey<G>,
+        mu: G::ScalarField,
+        rng: &mut R,
+    ) -> (Signature<G>, Vec<G::G1>) {
         let mut psi = G::ScalarField::rand(rng);
         while psi.is_zero() {
             psi = G::ScalarField::rand(rng);
@@ -61,16 +65,18 @@ impl<G: Pairing> Signature<G> {
         let y = self.y * psi_inv;
         let yp = self.yp * psi_inv;
 
-        let msg = msg
-            .iter()
-            .map(|m| *m * mu)
-            .collect();
+        let msg = msg.iter().map(|m| *m * mu).collect();
 
         (Signature { z, y, yp }, msg)
     }
 
-    pub fn chg_rep_half<R: RngCore>(&self, msg: &Vec<G::G1>, pk: &PublicKey<G>, mu: G::ScalarField, rng: &mut R) -> (Signature<G>, Vec<G::G1>) {
-
+    pub fn chg_rep_half<R: RngCore>(
+        &self,
+        msg: &Vec<G::G1>,
+        pk: &PublicKey<G>,
+        mu: G::ScalarField,
+        rng: &mut R,
+    ) -> (Signature<G>, Vec<G::G1>) {
         let mut psi = G::ScalarField::rand(rng);
         while psi.is_zero() {
             psi = G::ScalarField::rand(rng);
@@ -81,15 +87,18 @@ impl<G: Pairing> Signature<G> {
         let y = self.y * psi_inv;
         let yp = self.yp * psi_inv;
 
-        let msg = msg
-            .iter()
-            .map(|m| *m * mu)
-            .collect();
+        let msg = msg.iter().map(|m| *m * mu).collect();
 
         (Signature { z, y, yp }, msg)
     }
 
-    pub fn convertsig<R: RngCore>(&self, msg: &Vec<G::G1>, pk: &PublicKey<G>, rho: G::ScalarField, rng: &mut R) ->Signature<G> {
+    pub fn convertsig<R: RngCore>(
+        &self,
+        msg: &Vec<G::G1>,
+        pk: &PublicKey<G>,
+        rho: G::ScalarField,
+        rng: &mut R,
+    ) -> Signature<G> {
         let mut psi = G::ScalarField::rand(rng);
         while psi.is_zero() {
             psi = G::ScalarField::rand(rng);
@@ -104,7 +113,7 @@ impl<G: Pairing> Signature<G> {
 
 #[cfg(test)]
 mod tests {
-    use crate::sign::{SecretKey, PublicKey, keygen};
+    use crate::sign::{PublicKey, SecretKey, keygen};
 
     use ark_bls12_381;
     use ark_ff::UniformRand;
@@ -113,7 +122,10 @@ mod tests {
     fn sign_correctness() {
         let capacity = 4;
         let mut rng = ark_std::test_rng();
-        let (sk, pk): (SecretKey<ark_bls12_381::Bls12_381>, PublicKey<ark_bls12_381::Bls12_381>) = keygen(capacity, &mut rng);
+        let (sk, pk): (
+            SecretKey<ark_bls12_381::Bls12_381>,
+            PublicKey<ark_bls12_381::Bls12_381>,
+        ) = keygen(capacity, &mut rng);
 
         let msg = vec![ark_bls12_381::G1Projective::rand(&mut rng); 4];
         let msg_half = vec![ark_bls12_381::G1Projective::rand(&mut rng); 2];
@@ -130,7 +142,10 @@ mod tests {
     fn chg_correctness() {
         let capacity = 4;
         let mut rng = ark_std::test_rng();
-        let (sk, pk): (SecretKey<ark_bls12_381::Bls12_381>, PublicKey<ark_bls12_381::Bls12_381>) = keygen(capacity, &mut rng);
+        let (sk, pk): (
+            SecretKey<ark_bls12_381::Bls12_381>,
+            PublicKey<ark_bls12_381::Bls12_381>,
+        ) = keygen(capacity, &mut rng);
 
         let msg = vec![ark_bls12_381::G1Projective::rand(&mut rng); 4];
         let msg_half = vec![ark_bls12_381::G1Projective::rand(&mut rng); 2];

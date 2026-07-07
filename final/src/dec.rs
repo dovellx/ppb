@@ -12,8 +12,8 @@
 
 use num_bigint::BigUint;
 
-use crate::escrow2::Escrow2Output;
 use crate::escrow_verify::escrow_verify;
+use crate::escrow2::Escrow2Output;
 use crate::keygen::{PublicKey, SecretKey};
 use crate::setup::Lambda;
 
@@ -76,13 +76,7 @@ pub fn dec(
     //   1. 再次验证 VerEscrow；
     //   2. 调用 HECdec 解密得到 f(x_2, y)；
     //   3. 构造 PoKS3 证明 π_z。
-    let dec_result = rust::dec_ppb(
-        &lambda.lambda_blue,
-        &sk.sk2,
-        c_y2,
-        &z.z2,
-    )
-    .ok()?;
+    let dec_result = rust::dec_ppb(&lambda.lambda_blue, &sk.sk2, c_y2, &z.z2).ok()?;
 
     let dec_out = dec_result?;
 
@@ -103,8 +97,8 @@ pub fn dec(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num_bigint::BigUint;
     use ark_ff::UniformRand;
+    use num_bigint::BigUint;
 
     use crate::keygen;
 
@@ -112,8 +106,7 @@ mod tests {
     fn test_lambda() -> Lambda {
         let lambda_bits = 64;
         let t = 3;
-        let cpar_star = rust::setup_pedersen(lambda_bits)
-            .expect("setup_pedersen should succeed");
+        let cpar_star = rust::setup_pedersen(lambda_bits).expect("setup_pedersen should succeed");
         crate::setup::setup(lambda_bits, t, cpar_star)
     }
 
@@ -143,8 +136,9 @@ mod tests {
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         let r_y2 = BigUint::from(67u32);
@@ -179,12 +173,9 @@ mod tests {
         let r_y2 = BigUint::from(67u32);
         let r_star_y1 = BigUint::from(53u32);
 
-        let c_star_y1_placeholder = rust::com_pedersen(
-            &lambda.cpar_star,
-            &BigUint::from(0u32),
-            &r_star_y1,
-        )
-        .expect("Pedersen commitment failed");
+        let c_star_y1_placeholder =
+            rust::com_pedersen(&lambda.cpar_star, &BigUint::from(0u32), &r_star_y1)
+                .expect("Pedersen commitment failed");
 
         let fake_sig = {
             let mut rng = ark_std::rand::rngs::OsRng;
@@ -195,8 +186,13 @@ mod tests {
         };
 
         let z = crate::escrow2::escrow2(
-            &lambda, &pk, &y, &r_star_y1, &r_y2,
-            &c_star_y1_placeholder, &fake_sig,
+            &lambda,
+            &pk,
+            &y,
+            &r_star_y1,
+            &r_y2,
+            &c_star_y1_placeholder,
+            &fake_sig,
         )
         .expect("Escrow2 should succeed for small list");
 
@@ -229,8 +225,9 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let endorse_out = crate::endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         let z = crate::escrow2::escrow2(&lambda, &pk, &y, &r_star_y1, &r_y2, c_star_y1, sigma_y)

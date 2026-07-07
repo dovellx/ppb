@@ -21,7 +21,7 @@ use ark_bls12_381::{Fr, G1Projective};
 use ark_ff::{UniformRand, Zero};
 use num_bigint::BigUint;
 
-use rust::{escrow_ppb, HecEvalInput, PpbEscrowOutput};
+use rust::{HecEvalInput, PpbEscrowOutput, escrow_ppb};
 
 use mercurial_signature::Signature as MsSignature;
 
@@ -102,14 +102,9 @@ pub fn escrow2(
     //   2. 采样 r^Z 并计算 Z_hat = HECeval(hecpar, f, X, y; r^Z)；
     //   3. 计算 C_y = Com_cpar(y; r_y)；
     //   4. 构造 PoKS2 证明 π_U。
-    let z2 = escrow_ppb(
-        &lambda.lambda_blue,
-        &pk.pk2,
-        y,
-        r_y2,
-    )
-    .expect("BLUE.Escrow for pk_Λ2 failed")
-    .expect("BLUE.Escrow for pk_Λ2 returned ⊥ (VerPK failed)");
+    let z2 = escrow_ppb(&lambda.lambda_blue, &pk.pk2, y, r_y2)
+        .expect("BLUE.Escrow for pk_Λ2 failed")
+        .expect("BLUE.Escrow for pk_Λ2 returned ⊥ (VerPK failed)");
 
     // ============================================================
     // Step 4: C_y2 ← COM.Com(cpar, y; r_y2)
@@ -215,15 +210,14 @@ mod tests {
     use super::*;
     use num_bigint::BigUint;
 
-    use crate::keygen;
     use crate::endorse;
+    use crate::keygen;
 
     /// 构造测试用的 Lambda。
     fn test_lambda() -> Lambda {
         let lambda_bits = 64;
         let t = 3;
-        let cpar_star = rust::setup_pedersen(lambda_bits)
-            .expect("setup_pedersen should succeed");
+        let cpar_star = rust::setup_pedersen(lambda_bits).expect("setup_pedersen should succeed");
         crate::setup::setup(lambda_bits, t, cpar_star)
     }
 
@@ -254,9 +248,10 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
         // Endorse 生成签名
-        let endorse_out = endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let endorse_out = endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         // Escrow2
@@ -265,7 +260,10 @@ mod tests {
             .expect("Escrow2 should return Some");
 
         // pk_Λ1 存在时，Z'_1 应为 Some 且消息非空
-        assert!(output.z1_prime.is_some(), "Z'_1 should exist when pk_Λ1 ≠ ⊥");
+        assert!(
+            output.z1_prime.is_some(),
+            "Z'_1 should exist when pk_Λ1 ≠ ⊥"
+        );
         assert!(output.pi_y.is_some(), "π_y should exist when pk_Λ1 ≠ ⊥");
         let z1p = output.z1_prime.as_ref().unwrap();
         assert_eq!(z1p.msg.len(), 2, "M' should have 2 G1 points");
@@ -298,11 +296,9 @@ mod tests {
         // 由于 ℓ ≤ t 时 endorse 不生成签名，我们需要构造一个假的 σ_y
         // 但 escrow2 在 pk_Λ1 = ⊥ 时不会验证签名（直接走 None 分支）
         // 所以这里用 escrow1 的 c_star_y1 作为占位
-        let c_star_y1_placeholder = rust::com_pedersen(
-            &lambda.cpar_star,
-            &BigUint::from(0u32),
-            &r_star_y1,
-        ).expect("Pedersen commitment failed");
+        let c_star_y1_placeholder =
+            rust::com_pedersen(&lambda.cpar_star, &BigUint::from(0u32), &r_star_y1)
+                .expect("Pedersen commitment failed");
 
         // 构造一个假签名（不被使用，因为 pk_Λ1 = ⊥）
         let fake_sig = {
@@ -316,13 +312,21 @@ mod tests {
         };
 
         let output = escrow2(
-            &lambda, &pk, &y, &r_star_y1, &r_y2,
-            &c_star_y1_placeholder, &fake_sig,
+            &lambda,
+            &pk,
+            &y,
+            &r_star_y1,
+            &r_y2,
+            &c_star_y1_placeholder,
+            &fake_sig,
         )
         .expect("Escrow2 should return Some even when pk_Λ1 = ⊥");
 
         // pk_Λ1 = ⊥ 时，Z'_1 应为 None
-        assert!(output.z1_prime.is_none(), "Z'_1 should be None when pk_Λ1 = ⊥");
+        assert!(
+            output.z1_prime.is_none(),
+            "Z'_1 should be None when pk_Λ1 = ⊥"
+        );
         assert!(output.pi_y.is_none(), "π_y should be None when pk_Λ1 = ⊥");
         assert!(output.c_y2 > BigUint::from(0u32), "C_y2 must be non-zero");
     }
@@ -351,8 +355,9 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let endorse_out = endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let endorse_out = endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         let r_y2 = BigUint::from(67u32);
@@ -394,8 +399,9 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let endorse_out = endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let endorse_out = endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         let r_y2 = BigUint::from(67u32);
@@ -405,9 +411,7 @@ mod tests {
         // 手动计算：m_y = (4 + 7) mod n = 11
         // C_y2 = g^{11} * h^{67} mod n^2
         let m_y = (BigUint::from(4u32) + BigUint::from(7u32)) % n;
-        let expected = (&lambda.cpar.g.modpow(&m_y, n2)
-            * &lambda.cpar.h.modpow(&r_y2, n2))
-            % n2;
+        let expected = (&lambda.cpar.g.modpow(&m_y, n2) * &lambda.cpar.h.modpow(&r_y2, n2)) % n2;
 
         assert_eq!(output.c_y2, expected);
     }
@@ -436,8 +440,9 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let endorse_out = endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let endorse_out = endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         let r_y2_a = BigUint::from(67u32);
@@ -448,7 +453,10 @@ mod tests {
         let out_b = escrow2(&lambda, &pk, &y, &r_star_y1, &r_y2_b, c_star_y1, sigma_y)
             .expect("Escrow2 should return Some");
 
-        assert_ne!(out_a.c_y2, out_b.c_y2, "different r_y2 should yield different C_y2");
+        assert_ne!(
+            out_a.c_y2, out_b.c_y2,
+            "different r_y2 should yield different C_y2"
+        );
     }
 
     #[test]
@@ -471,8 +479,9 @@ mod tests {
         let c_y1 = escrow1_out.c_y1.as_ref().unwrap();
         let c_star_y1 = escrow1_out.c_star_y1.as_ref().unwrap();
         let z1 = escrow1_out.z1.as_ref().unwrap();
+        let pi1 = escrow1_out.pi1.as_ref().unwrap();
 
-        let endorse_out = endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1);
+        let endorse_out = endorse::endorse(&lambda, &pk, &sk, c_y1, c_star_y1, z1, pi1);
         let sigma_y = endorse_out.sigma_sps.as_ref().unwrap();
 
         let y_other = HecEvalInput {
@@ -481,7 +490,9 @@ mod tests {
         };
         let r_y2 = BigUint::from(67u32);
 
-        let output = escrow2(&lambda, &pk, &y_other, &r_star_y1, &r_y2, c_star_y1, sigma_y);
+        let output = escrow2(
+            &lambda, &pk, &y_other, &r_star_y1, &r_y2, c_star_y1, sigma_y,
+        );
         assert!(output.is_none(), "S2 should reject mismatched y and C*_y1");
     }
 }

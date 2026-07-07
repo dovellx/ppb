@@ -44,7 +44,11 @@ pub fn setup_df(bits: usize) -> CryptoResult<DfParams> {
 ///
 /// 按论文形式，O = r，C = g^m * h^r mod n^2。
 /// randomness_bits 对应开口随机数的位长（可由上层设为 2B+lambda）。
-pub fn commit_df(params: &DfParams, m: &BigUint, randomness_bits: usize) -> CryptoResult<DfCommitment> {
+pub fn commit_df(
+    params: &DfParams,
+    m: &BigUint,
+    randomness_bits: usize,
+) -> CryptoResult<DfCommitment> {
     if randomness_bits == 0 {
         return Err(CryptoError::InvalidInput("randomness bits must be > 0"));
     }
@@ -61,7 +65,11 @@ pub fn commit_df(params: &DfParams, m: &BigUint, randomness_bits: usize) -> Cryp
 ///
 /// 该接口不会额外约束 m 的范围，
 /// 由协议上层决定消息空间与绑定/隐藏参数。
-pub fn commit_df_with_opening(params: &DfParams, m: &BigUint, r: &BigUint) -> CryptoResult<DfCommitment> {
+pub fn commit_df_with_opening(
+    params: &DfParams,
+    m: &BigUint,
+    r: &BigUint,
+) -> CryptoResult<DfCommitment> {
     let gm = params.g.modpow(m, &params.n2);
     let hr = params.h.modpow(r, &params.n2);
     let c = (gm * hr) % &params.n2;
@@ -84,20 +92,14 @@ pub(crate) fn derive_df_vector_bases(params: &DfParams, len: usize) -> CryptoRes
     let mut bases = Vec::with_capacity(len);
     let domain = BigUint::from(VECTOR_COMMITMENT_DOMAIN);
     for i in 0..len {
-        let idx_u64 =
-            u64::try_from(i + 1).map_err(|_| CryptoError::InvalidInput("vector base index too large"))?;
+        let idx_u64 = u64::try_from(i + 1)
+            .map_err(|_| CryptoError::InvalidInput("vector base index too large"))?;
         let idx = BigUint::from(idx_u64);
         let mut counter = BigUint::zero();
 
         loop {
             let candidate = fiat_shamir_challenge_biguints(&[
-                &domain,
-                &params.n,
-                &params.n2,
-                &params.g,
-                &params.h,
-                &idx,
-                &counter,
+                &domain, &params.n, &params.n2, &params.g, &params.h, &idx, &counter,
             ]) % &params.n2;
 
             if gcd(candidate.clone(), params.n2.clone()) != BigUint::one() {
@@ -129,7 +131,9 @@ pub(crate) fn commit_df_vector_with_bases(
     r: &BigUint,
 ) -> CryptoResult<DfCommitment> {
     if bases.len() != values.len() {
-        return Err(CryptoError::InvalidInput("vector bases/value length mismatch"));
+        return Err(CryptoError::InvalidInput(
+            "vector bases/value length mismatch",
+        ));
     }
 
     let mut c = params.h.modpow(r, &params.n2);
@@ -180,7 +184,8 @@ mod tests {
         let r = BigUint::from(67890u32);
 
         let com = commit_df_with_opening(&params, &m, &r).expect("commit should succeed");
-        let manual = (params.g.modpow(&m, &params.n2) * params.h.modpow(&r, &params.n2)) % &params.n2;
+        let manual =
+            (params.g.modpow(&m, &params.n2) * params.h.modpow(&r, &params.n2)) % &params.n2;
 
         assert_eq!(com.c, manual);
         assert_eq!(com.r, r);
@@ -196,8 +201,8 @@ mod tests {
         let (commitment, coeffs) =
             commit_df_multibase(&params, &x, &r, &s).expect("multibase commit should succeed");
         let bases = derive_df_vector_bases(&params, coeffs.len()).expect("bases should derive");
-        let manual =
-            commit_df_vector_with_bases(&params, &bases, &coeffs, &r).expect("manual commit should succeed");
+        let manual = commit_df_vector_with_bases(&params, &bases, &coeffs, &r)
+            .expect("manual commit should succeed");
 
         assert_eq!(commitment.c, manual.c);
         assert_eq!(commitment.r, r);
@@ -211,8 +216,10 @@ mod tests {
 
         let a = vec![BigUint::from(1u32), BigUint::from(2u32)];
         let b = vec![BigUint::from(2u32), BigUint::from(1u32)];
-        let ca = commit_df_vector_with_bases(&params, &bases, &a, &r).expect("commit should succeed");
-        let cb = commit_df_vector_with_bases(&params, &bases, &b, &r).expect("commit should succeed");
+        let ca =
+            commit_df_vector_with_bases(&params, &bases, &a, &r).expect("commit should succeed");
+        let cb =
+            commit_df_vector_with_bases(&params, &bases, &b, &r).expect("commit should succeed");
 
         assert_eq!(
             a.iter().fold(BigUint::from(0u32), |acc, v| acc + v),

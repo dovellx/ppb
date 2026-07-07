@@ -1,7 +1,8 @@
 use num_bigint::BigUint;
 
 use rust::{
-    dec_ppb, escrow_ppb, judge_ppb, keygen_ppb, setup_ppb, verify_poks3, HecEvalInput, HecFunctionKey,
+    HecEvalInput, HecFunctionKey, dec_ppb, escrow_ppb, judge_ppb, keygen_ppb, setup_ppb,
+    verify_poks3,
 };
 
 // 端到端系统测试：覆盖完整顺序链路与关键反例。
@@ -14,10 +15,15 @@ fn test_ppb_system_full_flow_in_order() {
     let params = setup_ppb(64, &(), &(), &()).expect("setup should succeed");
 
     // 2) keygen：生成用户公私钥及注册阶段关联承诺。
-    let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+    let x = vec![
+        BigUint::from(5u32),
+        BigUint::from(11u32),
+        BigUint::from(13u32),
+    ];
     let fk = HecFunctionKey { n: x.len(), k: 1 };
     let r_x = BigUint::from(37u32);
-    let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen should succeed");
+    let (pk_a, sk_a) =
+        keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen should succeed");
 
     // 3) escrow：用户提交待托管输入 y，并生成/验证 escrow 侧证明对象。
     let y = HecEvalInput {
@@ -74,10 +80,15 @@ fn test_ppb_system_judge_rejects_tampered_dec_proof() {
     // 反例目标：只篡改 dec 产出的 PoKS3 响应，Judge 必须拒绝。
     // 先确保 setup -> keygen -> escrow -> dec 主链路本身可正常执行。
     let params = setup_ppb(64, &(), &(), &()).expect("setup should succeed");
-    let x = vec![BigUint::from(7u32), BigUint::from(19u32), BigUint::from(23u32)];
+    let x = vec![
+        BigUint::from(7u32),
+        BigUint::from(19u32),
+        BigUint::from(23u32),
+    ];
     let fk = HecFunctionKey { n: x.len(), k: 1 };
     let r_x = BigUint::from(43u32);
-    let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen should succeed");
+    let (pk_a, sk_a) =
+        keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen should succeed");
 
     let y = HecEvalInput {
         y_id: BigUint::from(19u32),
@@ -114,10 +125,15 @@ fn test_ppb_system_judge_rejects_tampered_dec_proof() {
 fn test_ppb_system_judge_rejects_tampered_public_z() {
     // 反例目标：只篡改 dec 公开输出 z，不改证明本体，S3 必须拒绝。
     let params = setup_ppb(64, &(), &(), &()).expect("setup should succeed");
-    let x = vec![BigUint::from(7u32), BigUint::from(19u32), BigUint::from(23u32)];
+    let x = vec![
+        BigUint::from(7u32),
+        BigUint::from(19u32),
+        BigUint::from(23u32),
+    ];
     let fk = HecFunctionKey { n: x.len(), k: 1 };
     let r_x = BigUint::from(43u32);
-    let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen should succeed");
+    let (pk_a, sk_a) =
+        keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen should succeed");
 
     let y = HecEvalInput {
         y_id: BigUint::from(19u32),

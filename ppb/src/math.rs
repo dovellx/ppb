@@ -1,7 +1,7 @@
 use num_bigint::{BigInt, BigUint, RandBigInt, ToBigInt};
 use num_traits::{One, Zero};
-use rand::rngs::OsRng;
 use rand::RngCore;
+use rand::rngs::OsRng;
 
 use crate::error::{CryptoError, CryptoResult};
 
@@ -14,11 +14,7 @@ use crate::error::{CryptoError, CryptoResult};
 /// 是本文实现中 |QR_{n^2}| 语义的基础工具。
 pub fn abs_qr_rep(x: &BigUint, n2: &BigUint) -> BigUint {
     let half = n2 >> 1usize;
-    if x > &half {
-        n2 - x
-    } else {
-        x.clone()
-    }
+    if x > &half { n2 - x } else { x.clone() }
 }
 
 /// Euclid 算法：计算 gcd(a, b)。
@@ -87,7 +83,8 @@ pub fn modinv(a: &BigUint, m: &BigUint) -> CryptoResult<BigUint> {
 /// 2. n^2 太小（bitlen < 3）导致 B 非正或无意义。
 pub fn derive_b_bits_from_n2(n2: &BigUint) -> CryptoResult<usize> {
     let bits_u64 = n2.bits();
-    let bits = usize::try_from(bits_u64).map_err(|_| CryptoError::InvalidInput("n^2 bit length too large"))?;
+    let bits = usize::try_from(bits_u64)
+        .map_err(|_| CryptoError::InvalidInput("n^2 bit length too large"))?;
     if bits < 3 {
         return Err(CryptoError::InvalidInput("n^2 too small to derive B"));
     }
@@ -99,7 +96,8 @@ fn random_odd_with_bits<R: RngCore>(rng: &mut R, bits: usize) -> CryptoResult<Bi
     if bits < 2 {
         return Err(CryptoError::InvalidInput("prime bits must be >= 2"));
     }
-    let bits_u64 = u64::try_from(bits).map_err(|_| CryptoError::InvalidInput("bit size too large"))?;
+    let bits_u64 =
+        u64::try_from(bits).map_err(|_| CryptoError::InvalidInput("bit size too large"))?;
     let mut x = rng.gen_biguint(bits_u64);
     let one = BigUint::one();
     x |= &one << (bits - 1);
@@ -236,7 +234,8 @@ mod tests {
 
     #[test]
     fn test_modinv_small() {
-        let inv = modinv(&BigUint::from(3u32), &BigUint::from(11u32)).expect("inverse should exist");
+        let inv =
+            modinv(&BigUint::from(3u32), &BigUint::from(11u32)).expect("inverse should exist");
         assert_eq!(inv, BigUint::from(4u32));
     }
 }

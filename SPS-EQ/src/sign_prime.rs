@@ -1,4 +1,4 @@
-use ark_ec::{pairing::Pairing, PrimeGroup};
+use ark_ec::{PrimeGroup, pairing::Pairing};
 use ark_ff::{Field, UniformRand, Zero};
 use ark_std::rand::RngCore;
 
@@ -23,15 +23,16 @@ pub struct Signatureprime<G: Pairing> {
 }
 
 /// Generate a secret-public key pair
-pub fn keygen<G: Pairing, R: RngCore>(capacity: usize, rng: &mut R) -> (SecretKeyprime<G>, PublicKeyprime<G>) {
-    let scalars: Vec<G::ScalarField> = (0 .. capacity)
-        .map(|_| G::ScalarField::rand(rng))
-        .collect();
-    let points = scalars
-        .iter()
-        .map(|s| G::G1::generator() * s)
-        .collect();
-    (SecretKeyprime { capacity, scalars }, PublicKeyprime { capacity, points })
+pub fn keygen<G: Pairing, R: RngCore>(
+    capacity: usize,
+    rng: &mut R,
+) -> (SecretKeyprime<G>, PublicKeyprime<G>) {
+    let scalars: Vec<G::ScalarField> = (0..capacity).map(|_| G::ScalarField::rand(rng)).collect();
+    let points = scalars.iter().map(|s| G::G1::generator() * s).collect();
+    (
+        SecretKeyprime { capacity, scalars },
+        PublicKeyprime { capacity, points },
+    )
 }
 
 impl<G: Pairing> SecretKeyprime<G> {
@@ -56,7 +57,7 @@ impl<G: Pairing> SecretKeyprime<G> {
         let z = prod * r;
         let yp = G::G2::generator() * r_inv;
         let y = G::G1::generator() * r_inv;
-        
+
         Signatureprime { z, yp, y }
     }
 
@@ -98,19 +99,39 @@ mod tests {
     fn key_length() {
         let capacity = 4;
         let mut rng = ark_std::test_rng();
-        let (sk, pk): (SecretKeyprime<ark_bls12_381::Bls12_381>, PublicKeyprime<ark_bls12_381::Bls12_381>) = keygen(capacity, &mut rng);
-        assert_eq!(sk.scalars.len(), capacity, "The length of secret key should be {}.", capacity);
-        assert_eq!(pk.points.len(), capacity, "The length of public key should be {}.", capacity);
+        let (sk, pk): (
+            SecretKeyprime<ark_bls12_381::Bls12_381>,
+            PublicKeyprime<ark_bls12_381::Bls12_381>,
+        ) = keygen(capacity, &mut rng);
+        assert_eq!(
+            sk.scalars.len(),
+            capacity,
+            "The length of secret key should be {}.",
+            capacity
+        );
+        assert_eq!(
+            pk.points.len(),
+            capacity,
+            "The length of public key should be {}.",
+            capacity
+        );
     }
 
     #[test]
     fn secret_key_randomness() {
         let capacity = 4;
         let mut rng = ark_std::test_rng();
-        let (sk, _): (SecretKeyprime<ark_bls12_381::Bls12_381>, PublicKeyprime<ark_bls12_381::Bls12_381>) = keygen(capacity, &mut rng);
-        for i in 0 .. sk.scalars.len() {
-            for j in i + 1 .. sk.scalars.len() {
-                assert_ne!(sk.scalars[i], sk.scalars[j], "The {}-th part and {}-th part should not be equal", i, j);
+        let (sk, _): (
+            SecretKeyprime<ark_bls12_381::Bls12_381>,
+            PublicKeyprime<ark_bls12_381::Bls12_381>,
+        ) = keygen(capacity, &mut rng);
+        for i in 0..sk.scalars.len() {
+            for j in i + 1..sk.scalars.len() {
+                assert_ne!(
+                    sk.scalars[i], sk.scalars[j],
+                    "The {}-th part and {}-th part should not be equal",
+                    i, j
+                );
             }
         }
     }
@@ -119,8 +140,17 @@ mod tests {
     fn secret_key_uniqueness() {
         let capacity = 4;
         let mut rng = ark_std::test_rng();
-        let (sk1, _): (SecretKeyprime<ark_bls12_381::Bls12_381>, PublicKeyprime<ark_bls12_381::Bls12_381>) = keygen(capacity, &mut rng);
-        let (sk2, _): (SecretKeyprime<ark_bls12_381::Bls12_381>, PublicKeyprime<ark_bls12_381::Bls12_381>) = keygen(capacity, &mut rng);
-        assert_ne!(sk1.scalars, sk2.scalars, "Two secret keys should be different.");
+        let (sk1, _): (
+            SecretKeyprime<ark_bls12_381::Bls12_381>,
+            PublicKeyprime<ark_bls12_381::Bls12_381>,
+        ) = keygen(capacity, &mut rng);
+        let (sk2, _): (
+            SecretKeyprime<ark_bls12_381::Bls12_381>,
+            PublicKeyprime<ark_bls12_381::Bls12_381>,
+        ) = keygen(capacity, &mut rng);
+        assert_ne!(
+            sk1.scalars, sk2.scalars,
+            "Two secret keys should be different."
+        );
     }
 }

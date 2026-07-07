@@ -2,7 +2,9 @@ use num_bigint::{BigUint, RandBigInt};
 use num_traits::{One, Zero};
 use rand::rngs::OsRng;
 
-use crate::cs::{dec_cs, enc_cs, enc_cs_with_randomness, keygen_cs, setup_cs, CsParams, CsPubKey, CsSecretKey};
+use crate::cs::{
+    CsParams, CsPubKey, CsSecretKey, dec_cs, enc_cs, enc_cs_with_randomness, keygen_cs, setup_cs,
+};
 use crate::error::{CryptoError, CryptoResult};
 use crate::pok::{CamenischShoupCiphertext, CiphertextPolynomial, Scalar};
 
@@ -161,7 +163,11 @@ fn cs_homomorphic_scalar_mul(
 /// 1. 采用迭代乘法，每次把当前多项式乘以 `(chi - x_i)`；
 /// 2. 所有加减乘都在 `mod n` 下进行；
 /// 3. 减法通过 `(-x_i) mod n = (n - (x_i mod n)) mod n` 实现。
-pub fn expand_roots_to_coefficients_mod_n(x: &[Scalar], s: &Scalar, n: &BigUint) -> CryptoResult<Vec<Scalar>> {
+pub fn expand_roots_to_coefficients_mod_n(
+    x: &[Scalar],
+    s: &Scalar,
+    n: &BigUint,
+) -> CryptoResult<Vec<Scalar>> {
     if n.is_zero() {
         return Err(CryptoError::InvalidInput("modulus n must be non-zero"));
     }
@@ -204,7 +210,11 @@ pub fn expand_roots_to_coefficients_mod_n(x: &[Scalar], s: &Scalar, n: &BigUint)
 /// 3. `P <- s * Π(chi - x_i)`：在 `Z_n` 中展开为系数；
 /// 4. 逐系数加密 `A_i <- Enc(pk_AH, P_i)`；
 /// 5. 返回公开包 `X` 与审计上下文 `d`。
-pub fn hec_enc(hecpar: &HecParams, fk: &HecFunctionKey, x: &[Scalar]) -> CryptoResult<HecEncOutput> {
+pub fn hec_enc(
+    hecpar: &HecParams,
+    fk: &HecFunctionKey,
+    x: &[Scalar],
+) -> CryptoResult<HecEncOutput> {
     let mask = sample_nonzero_scalar_mod_n(&hecpar.cs_params.n)?;
     hec_enc_with_mask(hecpar, fk, x, &mask)
 }
@@ -227,7 +237,9 @@ pub fn hec_enc_with_mask(
         return Err(CryptoError::InvalidInput("fk.n must equal x.len()"));
     }
     if (mask % &hecpar.cs_params.n).is_zero() {
-        return Err(CryptoError::InvalidInput("HEC mask must be non-zero in Z_n"));
+        return Err(CryptoError::InvalidInput(
+            "HEC mask must be non-zero in Z_n",
+        ));
     }
 
     // Step 1: 生成 AH 密钥对。
@@ -362,7 +374,9 @@ pub fn hec_dec(
     z: &HecEvalOutput,
 ) -> CryptoResult<Option<HecEvalInput>> {
     if d_audit.fk.n != d_audit.x.len() {
-        return Err(CryptoError::InvalidInput("audit context fk.n must equal x.len()"));
+        return Err(CryptoError::InvalidInput(
+            "audit context fk.n must equal x.len()",
+        ));
     }
 
     let n = &hecpar.cs_params.n;
@@ -404,15 +418,27 @@ mod tests {
         // 2 * (chi-3)(chi-5) = 2 * (chi^2 - 8chi + 15)
         // 在 Z_97 中：[-8 mod 97 = 89]
         // 系数（升幂）：[30, 81, 2]
-        let coeffs = expand_roots_to_coefficients_mod_n(&x, &s, &n).expect("expansion should succeed");
-        assert_eq!(coeffs, vec![BigUint::from(30u32), BigUint::from(81u32), BigUint::from(2u32)]);
+        let coeffs =
+            expand_roots_to_coefficients_mod_n(&x, &s, &n).expect("expansion should succeed");
+        assert_eq!(
+            coeffs,
+            vec![
+                BigUint::from(30u32),
+                BigUint::from(81u32),
+                BigUint::from(2u32)
+            ]
+        );
     }
 
     #[test]
     fn test_hec_enc_output_shape() {
         let hecpar = setup_hec(64).expect("setup hec should succeed");
         let fk = HecFunctionKey { n: 3, k: 1 };
-        let x = vec![BigUint::from(4u32), BigUint::from(7u32), BigUint::from(9u32)];
+        let x = vec![
+            BigUint::from(4u32),
+            BigUint::from(7u32),
+            BigUint::from(9u32),
+        ];
 
         let out = hec_enc(&hecpar, &fk, &x).expect("hec enc should succeed");
 
@@ -432,7 +458,8 @@ mod tests {
 
         for root in &out.d_audit.x {
             let eval_ct = out.x_public.polynomial.evaluate(root);
-            let m = dec_cs(&hecpar.cs_params, &out.d_audit.sk_e, &eval_ct).expect("decrypt should succeed");
+            let m = dec_cs(&hecpar.cs_params, &out.d_audit.sk_e, &eval_ct)
+                .expect("decrypt should succeed");
             assert_eq!(m, BigUint::zero());
         }
     }
@@ -442,24 +469,35 @@ mod tests {
         let hecpar = setup_hec(64).expect("setup hec should succeed");
         let (pk, sk) = keygen_cs(&hecpar.cs_params).expect("keygen should succeed");
 
-        let roots = vec![BigUint::from(4u32), BigUint::from(7u32), BigUint::from(9u32)];
+        let roots = vec![
+            BigUint::from(4u32),
+            BigUint::from(7u32),
+            BigUint::from(9u32),
+        ];
         let s = BigUint::from(13u32);
         let coeffs = expand_roots_to_coefficients_mod_n(&roots, &s, &hecpar.cs_params.n)
             .expect("expansion should succeed");
 
         let mut encrypted_coeffs = Vec::with_capacity(coeffs.len());
         for coeff in &coeffs {
-            encrypted_coeffs.push(enc_cs(&hecpar.cs_params, &pk, coeff).expect("enc coeff should succeed"));
+            encrypted_coeffs
+                .push(enc_cs(&hecpar.cs_params, &pk, coeff).expect("enc coeff should succeed"));
         }
-        let poly = CiphertextPolynomial::new(encrypted_coeffs, &hecpar.cs_params.n2).expect("poly should build");
+        let poly = CiphertextPolynomial::new(encrypted_coeffs, &hecpar.cs_params.n2)
+            .expect("poly should build");
 
-        let chis = vec![BigUint::from(2u32), BigUint::from(5u32), BigUint::from(11u32)];
+        let chis = vec![
+            BigUint::from(2u32),
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+        ];
         for chi in chis {
             // 明文侧：P(chi) = sum_i coeff_i * chi^i (mod n)
             let mut expected = BigUint::zero();
             let mut chi_pow = BigUint::one();
             for coeff in &coeffs {
-                expected = (expected + ((coeff * &chi_pow) % &hecpar.cs_params.n)) % &hecpar.cs_params.n;
+                expected =
+                    (expected + ((coeff * &chi_pow) % &hecpar.cs_params.n)) % &hecpar.cs_params.n;
                 chi_pow = (&chi_pow * &chi) % &hecpar.cs_params.n;
             }
 
@@ -489,7 +527,8 @@ mod tests {
             r3: BigUint::zero(),
         };
 
-        let err = hec_eval(&hecpar, &fk, 1, &enc.x_public, &y, &r_z).expect_err("r3=0 must be rejected");
+        let err =
+            hec_eval(&hecpar, &fk, 1, &enc.x_public, &y, &r_z).expect_err("r3=0 must be rejected");
         assert_eq!(err, CryptoError::InvalidInput("r3 must be non-zero in Z_n"));
     }
 
@@ -513,11 +552,15 @@ mod tests {
             r3: BigUint::from(29u32),
         };
 
-        let out = hec_eval(&hecpar, &fk, 1, &enc.x_public, &y, &r_z).expect("hec eval should succeed");
+        let out =
+            hec_eval(&hecpar, &fk, 1, &enc.x_public, &y, &r_z).expect("hec eval should succeed");
 
-        let z_id_plain = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_id).expect("decrypt zid should succeed");
-        let z_at_plain = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_at).expect("decrypt zat should succeed");
-        let z_nf_plain = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_nf).expect("decrypt znf should succeed");
+        let z_id_plain = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_id)
+            .expect("decrypt zid should succeed");
+        let z_at_plain = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_at)
+            .expect("decrypt zat should succeed");
+        let z_nf_plain = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_nf)
+            .expect("decrypt znf should succeed");
 
         assert_eq!(z_id_plain, y.y_id % &hecpar.cs_params.n);
         assert_eq!(z_at_plain, y.y_at % &hecpar.cs_params.n);
@@ -528,7 +571,11 @@ mod tests {
     fn test_hec_eval_non_hit_case_matches_formula() {
         let hecpar = setup_hec(64).expect("setup hec should succeed");
         let fk = HecFunctionKey { n: 3, k: 1 };
-        let x = vec![BigUint::from(4u32), BigUint::from(7u32), BigUint::from(9u32)];
+        let x = vec![
+            BigUint::from(4u32),
+            BigUint::from(7u32),
+            BigUint::from(9u32),
+        ];
         let enc = hec_enc(&hecpar, &fk, &x).expect("hec enc should succeed");
 
         // 不命中名单：8 不在 roots 中。
@@ -544,7 +591,8 @@ mod tests {
             r3: BigUint::from(17u32),
         };
 
-        let out = hec_eval(&hecpar, &fk, 1, &enc.x_public, &y, &r_z).expect("hec eval should succeed");
+        let out =
+            hec_eval(&hecpar, &fk, 1, &enc.x_public, &y, &r_z).expect("hec eval should succeed");
 
         let n = &hecpar.cs_params.n;
         let y_id_mod = &y.y_id % n;
@@ -553,18 +601,23 @@ mod tests {
         let r2_mod = &r_z.r2 % n;
         let r3_mod = &r_z.r3 % n;
 
-        let poly = CiphertextPolynomial::new(enc.x_public.encrypted_coeffs.clone(), &hecpar.cs_params.n2)
-            .expect("poly build should succeed");
+        let poly =
+            CiphertextPolynomial::new(enc.x_public.encrypted_coeffs.clone(), &hecpar.cs_params.n2)
+                .expect("poly build should succeed");
         let e_ct = poly.evaluate(&y_id_mod);
-        let e_plain = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &e_ct).expect("decrypt E should succeed");
+        let e_plain =
+            dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &e_ct).expect("decrypt E should succeed");
 
         let expected_zid = ((&r1_mod * &e_plain) + &y_id_mod) % n;
         let expected_zat = ((&r2_mod * &e_plain) + &y_at_mod) % n;
         let expected_znf = (&r3_mod * &e_plain) % n;
 
-        let got_zid = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_id).expect("decrypt zid should succeed");
-        let got_zat = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_at).expect("decrypt zat should succeed");
-        let got_znf = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_nf).expect("decrypt znf should succeed");
+        let got_zid = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_id)
+            .expect("decrypt zid should succeed");
+        let got_zat = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_at)
+            .expect("decrypt zat should succeed");
+        let got_znf = dec_cs(&hecpar.cs_params, &enc.d_audit.sk_e, &out.z_nf)
+            .expect("decrypt znf should succeed");
 
         assert_eq!(got_zid, expected_zid);
         assert_eq!(got_zat, expected_zat);
@@ -589,7 +642,8 @@ mod tests {
             r2: BigUint::from(23u32),
             r3: BigUint::from(29u32),
         };
-        let z = hec_eval(&hecpar, &fk, 1, &enc.x_public, &y, &r_z).expect("hec eval should succeed");
+        let z =
+            hec_eval(&hecpar, &fk, 1, &enc.x_public, &y, &r_z).expect("hec eval should succeed");
 
         let out = hec_dec(&hecpar, &enc.d_audit, &z).expect("hec dec should succeed");
         let recovered = out.expect("hit case should recover identity");
@@ -617,7 +671,8 @@ mod tests {
             r2: BigUint::from(11u32),
             r3: BigUint::from(13u32),
         };
-        let z = hec_eval(&hecpar, &fk, 1, &enc.x_public, &y, &r_z).expect("hec eval should succeed");
+        let z =
+            hec_eval(&hecpar, &fk, 1, &enc.x_public, &y, &r_z).expect("hec eval should succeed");
 
         let out = hec_dec(&hecpar, &enc.d_audit, &z).expect("hec dec should succeed");
         assert!(out.is_none());

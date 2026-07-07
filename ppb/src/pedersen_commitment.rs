@@ -1,6 +1,6 @@
 use ark_bls12_381::{Fr, G1Projective};
 use ark_ec::PrimeGroup;
-use ark_ff::{BigInteger, UniformRand, PrimeField};
+use ark_ff::{BigInteger, PrimeField, UniformRand};
 use num_bigint::{BigUint, RandBigInt};
 use rand::rngs::OsRng;
 
@@ -43,8 +43,8 @@ pub struct PedersenCommitmentParams {
 /// `C = g1 * m + h1 * r`，其中 m, r 为标量，+ 为椭圆曲线点加法。
 #[derive(Debug, Clone)]
 pub struct PedersenCommitment {
-    pub c: G1Projective,  // 承诺值：椭圆曲线点
-    pub r: BigUint,       // 开口随机数（原始大整数形式）
+    pub c: G1Projective, // 承诺值：椭圆曲线点
+    pub r: BigUint,      // 开口随机数（原始大整数形式）
 }
 
 /// CSetup(1^lambda) -> cpar*
@@ -79,7 +79,11 @@ pub fn setup_pedersen(_bits: usize) -> CryptoResult<PedersenCommitmentParams> {
 ///
 /// 输出：
 /// 1. 承诺值 `C = g1 * m + h1 * r`（椭圆曲线点）。
-pub fn com_pedersen(params: &PedersenCommitmentParams, m: &BigUint, r: &BigUint) -> CryptoResult<G1Projective> {
+pub fn com_pedersen(
+    params: &PedersenCommitmentParams,
+    m: &BigUint,
+    r: &BigUint,
+) -> CryptoResult<G1Projective> {
     // 将大整数转换为 Fr 标量
     let m_scalar = biguint_to_fr(m);
     let r_scalar = biguint_to_fr(r);
@@ -97,7 +101,10 @@ pub fn com_pedersen(params: &PedersenCommitmentParams, m: &BigUint, r: &BigUint)
 /// 与现有承诺模块风格一致：
 /// 1. 内部自动采样 `r <- Z_order`，其中 order 为 Fr 域的阶；
 /// 2. 返回 `(C, r)` 方便上层直接保存开口。
-pub fn commit_pedersen(params: &PedersenCommitmentParams, m: &BigUint) -> CryptoResult<PedersenCommitment> {
+pub fn commit_pedersen(
+    params: &PedersenCommitmentParams,
+    m: &BigUint,
+) -> CryptoResult<PedersenCommitment> {
     let mut rng = OsRng;
     let order = fr_order();
     let r = rng.gen_biguint_below(&order);
@@ -155,7 +162,8 @@ mod tests {
         // 计算和
         let m_sum = &m1 + &m2;
         let r_sum = &r1 + &r2;
-        let com_sum = commit_pedersen_with_opening(&params, &m_sum, &r_sum).expect("commit should succeed");
+        let com_sum =
+            commit_pedersen_with_opening(&params, &m_sum, &r_sum).expect("commit should succeed");
 
         // 验证同态性：C(m1 + m2, r1 + r2) = C(m1, r1) + C(m2, r2)
         assert_eq!(com_sum.c, com1.c + com2.c);

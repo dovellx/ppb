@@ -2,23 +2,23 @@ use num_bigint::{BigInt, BigUint, RandBigInt, ToBigInt};
 use num_traits::{One, Zero};
 use rand::rngs::OsRng;
 
-use crate::cs::{enc_cs_with_randomness, keygen_cs, CsPubKey};
+use crate::cs::{CsPubKey, enc_cs_with_randomness, keygen_cs};
 use crate::cs_commit::{
-    prove_cs_add, prove_cs_enc, prove_cs_mult, setup_cs_commit, verify_cs_add, verify_cs_com,
-    verify_cs_com_ciphertext, verify_cs_enc, verify_cs_mult, CsAddProof, CsCommitOpening,
-    CsCommitParams, CsCommitment, CsCommitmentWithOpening, CsComProof, CsEncProof, CsMultProof,
+    CsAddProof, CsComProof, CsCommitOpening, CsCommitParams, CsCommitment, CsCommitmentWithOpening,
+    CsEncProof, CsMultProof, prove_cs_add, prove_cs_enc, prove_cs_mult, setup_cs_commit,
+    verify_cs_add, verify_cs_com, verify_cs_com_ciphertext, verify_cs_enc, verify_cs_mult,
 };
-use crate::df::{commit_df, commit_df_with_opening, DfParams};
+use crate::df::{DfParams, commit_df, commit_df_with_opening};
 use crate::error::{CryptoError, CryptoResult};
 use crate::hash::{fiat_shamir_challenge, fiat_shamir_challenge_biguints};
 use crate::hec::{
-    hec_dec, hec_enc_with_mask, hec_eval, setup_hec, HecAuditData, HecEvalInput, HecEvalOutput,
-    HecEvalRandomness, HecFunctionKey, HecParams, HecPublicPackage,
+    HecAuditData, HecEvalInput, HecEvalOutput, HecEvalRandomness, HecFunctionKey, HecParams,
+    HecPublicPackage, hec_dec, hec_enc_with_mask, hec_eval, setup_hec,
 };
 use crate::math::{abs_qr_rep, derive_b_bits_from_n2, gcd, modinv, sample_unit_mod_n2};
 use crate::pok::{
-    pokp, verify_df_open_public_scalar, verify_mult as verify_df_square_mult, CiphertextPolynomial,
-    PoKAuxEntry, PoKPProof, PoKStarProof, PoKTranscript,
+    CiphertextPolynomial, PoKAuxEntry, PoKPProof, PoKStarProof, PoKTranscript, pokp,
+    verify_df_open_public_scalar, verify_mult as verify_df_square_mult,
 };
 
 /// PPB 全局参数 `Λ = (λ, cpar, hecpar, S1, S2, S3)` 的当前实现。
@@ -273,8 +273,9 @@ fn append_biguint_with_len(bytes: &mut Vec<u8>, value: &BigUint) {
 ///
 /// 统一包装转换错误，避免在主流程里散落重复的 `ok_or(...)`。
 fn bu_to_bi(v: &BigUint) -> CryptoResult<BigInt> {
-    v.to_bigint()
-        .ok_or(CryptoError::InvalidInput("BigUint->BigInt conversion failed"))
+    v.to_bigint().ok_or(CryptoError::InvalidInput(
+        "BigUint->BigInt conversion failed",
+    ))
 }
 
 /// CS 密文同态加法：Enc(a) ⊕ Enc(b) = Enc(a+b)。
@@ -364,7 +365,8 @@ fn wrap_ciphertext_for_cs_enc(
     }
 
     let raw_c0 = params_ah.g_star.modpow(r_enc, &params_ah.n2);
-    let raw_c1 = (k.modpow(r_enc, &params_ah.n2) * params_ah.h_star.modpow(y, &params_ah.n2)) % &params_ah.n2;
+    let raw_c1 = (k.modpow(r_enc, &params_ah.n2) * params_ah.h_star.modpow(y, &params_ah.n2))
+        % &params_ah.n2;
 
     let ct_c0 = &ct.c0 % &params_ah.n2;
     let ct_c1 = &ct.c1 % &params_ah.n2;
@@ -440,11 +442,7 @@ fn sign_pow_i8(sign: i8, exp: &BigInt) -> CryptoResult<i8> {
         return Err(CryptoError::InvalidInput("sign must be in {-1,+1}"));
     }
     let is_even = (exp % BigInt::from(2u32)) == BigInt::zero();
-    if is_even {
-        Ok(1)
-    } else {
-        Ok(sign)
-    }
+    if is_even { Ok(1) } else { Ok(sign) }
 }
 
 /// 计算 Mult 证明所需的符号向量 `b`。
@@ -571,16 +569,16 @@ fn sample_symmetric_bigint(rng: &mut OsRng, ell: usize) -> CryptoResult<BigInt> 
 /// 这个 helper 是 PoKS1 必需的，因为响应值 `z_*` 在整数域中可为负。
 fn modpow_signed_ppb(base: &BigUint, exp: &BigInt, modulus: &BigUint) -> CryptoResult<BigUint> {
     if exp >= &BigInt::zero() {
-        let exp_u = exp
-            .to_biguint()
-            .ok_or(CryptoError::InvalidInput("non-negative exponent conversion failed"))?;
+        let exp_u = exp.to_biguint().ok_or(CryptoError::InvalidInput(
+            "non-negative exponent conversion failed",
+        ))?;
         return Ok(base.modpow(&exp_u, modulus));
     }
 
     let inv = modinv(base, modulus)?;
-    let abs_exp = (-exp)
-        .to_biguint()
-        .ok_or(CryptoError::InvalidInput("negative exponent abs conversion failed"))?;
+    let abs_exp = (-exp).to_biguint().ok_or(CryptoError::InvalidInput(
+        "negative exponent abs conversion failed",
+    ))?;
     Ok(inv.modpow(&abs_exp, modulus))
 }
 
@@ -637,7 +635,11 @@ fn commit_s1_vector_with_bases(
 }
 
 /// 使用确定性派生的 S1 基计算向量承诺。
-fn commit_s1_vector(params: &PpbParams, values: &[BigUint], opening: &BigUint) -> CryptoResult<BigUint> {
+fn commit_s1_vector(
+    params: &PpbParams,
+    values: &[BigUint],
+    opening: &BigUint,
+) -> CryptoResult<BigUint> {
     let bases = derive_s1_bases(params, values.len())?;
     commit_s1_vector_with_bases(params, &bases, values, opening)
 }
@@ -747,8 +749,8 @@ fn build_s1_final_proof(
     rho_star: &BigUint,
 ) -> CryptoResult<PpbS1FinalProof> {
     let blind_bits = derive_poks1_blinding_bits(params)?;
-    let blind_bits_u64 =
-        u64::try_from(blind_bits).map_err(|_| CryptoError::InvalidInput("S1 blind bits too large"))?;
+    let blind_bits_u64 = u64::try_from(blind_bits)
+        .map_err(|_| CryptoError::InvalidInput("S1 blind bits too large"))?;
     let mut rng = OsRng;
 
     let k_x = rng.gen_biguint(blind_bits_u64);
@@ -758,7 +760,8 @@ fn build_s1_final_proof(
     let k_sk = rng.gen_biguint(blind_bits_u64);
     let k_rho = rng.gen_biguint(blind_bits_u64);
 
-    let r_cx = (g_star.modpow(&k_x, &params.cpar.n2) * params.cpar.h.modpow(&k_rx, &params.cpar.n2))
+    let r_cx = (g_star.modpow(&k_x, &params.cpar.n2)
+        * params.cpar.h.modpow(&k_rx, &params.cpar.n2))
         % &params.cpar.n2;
     let r_cd = (params.cpar.g.modpow(&k_md, &params.cpar.n2)
         * params.cpar.h.modpow(&k_rd, &params.cpar.n2))
@@ -826,7 +829,8 @@ fn verify_s1_final_proof(
     let lhs_cx = (g_star.modpow(&(&two * &proof.z_x), &params.cpar.n2)
         * params.cpar.h.modpow(&(&two * &proof.z_rx), &params.cpar.n2))
         % &params.cpar.n2;
-    let rhs_cx = (proof.r_cx.modpow(&two, &params.cpar.n2) * c_star.modpow(&two_e, &params.cpar.n2))
+    let rhs_cx = (proof.r_cx.modpow(&two, &params.cpar.n2)
+        * c_star.modpow(&two_e, &params.cpar.n2))
         % &params.cpar.n2;
 
     // 2) Cd = g^{m_d} h^{r_d}，沿用当前工程对 d 的哈希承诺。
@@ -851,7 +855,8 @@ fn verify_s1_final_proof(
         .cs_params
         .g
         .modpow(&(&two * &proof.z_rho), &params.cpar.n2);
-    let rhs_u = (proof.r_u.modpow(&two, &params.cpar.n2) * a_star.c0.modpow(&two_e, &params.cpar.n2))
+    let rhs_u = (proof.r_u.modpow(&two, &params.cpar.n2)
+        * a_star.c0.modpow(&two_e, &params.cpar.n2))
         % &params.cpar.n2;
 
     // 5) A*.c1 = |pkAH^rho h_cs^x|。
@@ -862,10 +867,17 @@ fn verify_s1_final_proof(
             .h
             .modpow(&(&two * &proof.z_x), &params.cpar.n2))
         % &params.cpar.n2;
-    let rhs_v = (proof.r_v.modpow(&two, &params.cpar.n2) * a_star.c1.modpow(&two_e, &params.cpar.n2))
+    let rhs_v = (proof.r_v.modpow(&two, &params.cpar.n2)
+        * a_star.c1.modpow(&two_e, &params.cpar.n2))
         % &params.cpar.n2;
 
-    Ok(lhs_cx == rhs_cx && lhs_cd == rhs_cd && lhs_pk == rhs_pk && lhs_u == rhs_u && lhs_v == rhs_v)
+    Ok(
+        lhs_cx == rhs_cx
+            && lhs_cd == rhs_cd
+            && lhs_pk == rhs_pk
+            && lhs_u == rhs_u
+            && lhs_v == rhs_v,
+    )
 }
 
 /// 验证 PoKS1 证明。
@@ -877,7 +889,9 @@ fn verify_poks1(params: &PpbParams, pk_a: &PpbPublicKey, c_x: &BigUint) -> Crypt
         return Ok(false);
     }
     if params.cpar.n != params.hecpar.cs_params.n || params.cpar.n2 != params.hecpar.cs_params.n2 {
-        return Err(CryptoError::InvalidInput("PoKS1 requires cpar and HEC modulus to match"));
+        return Err(CryptoError::InvalidInput(
+            "PoKS1 requires cpar and HEC modulus to match",
+        ));
     }
     if pk_a.x_public.encrypted_coeffs.is_empty() {
         return Ok(false);
@@ -939,7 +953,12 @@ fn verify_poks1(params: &PpbParams, pk_a: &PpbPublicKey, c_x: &BigUint) -> Crypt
         for i in 0..half {
             let folded_base =
                 (&bases[i] * bases[i + half].modpow(&beta, &params.cpar.n2)) % &params.cpar.n2;
-            let folded_ct = fold_s1_ciphertexts(&ciphertexts[i], &ciphertexts[i + half], &beta, &params.cpar.n2);
+            let folded_ct = fold_s1_ciphertexts(
+                &ciphertexts[i],
+                &ciphertexts[i + half],
+                &beta,
+                &params.cpar.n2,
+            );
             next_bases.push(folded_base);
             next_ciphertexts.push(folded_ct);
         }
@@ -1060,7 +1079,8 @@ fn verify_poks3_decryption_equation(
 ) -> CryptoResult<bool> {
     let (base, target) = poks3_decryption_relation_parts(params, ct, plaintext)?;
     let lhs = modpow_signed_ppb(&base, z_sk, &params.hecpar.cs_params.n2)?;
-    let rhs = (commitment * target.modpow(e, &params.hecpar.cs_params.n2)) % &params.hecpar.cs_params.n2;
+    let rhs =
+        (commitment * target.modpow(e, &params.hecpar.cs_params.n2)) % &params.hecpar.cs_params.n2;
     Ok(lhs == rhs)
 }
 
@@ -1080,8 +1100,12 @@ pub fn verify_poks3(
     if params.cpar.n2.is_zero() || params.hecpar.cs_params.n2.is_zero() {
         return Err(CryptoError::InvalidInput("n^2 must be non-zero"));
     }
-    if &params.cpar.n != &params.hecpar.cs_params.n || &params.cpar.n2 != &params.hecpar.cs_params.n2 {
-        return Err(CryptoError::InvalidInput("PoKS3 requires cpar and HEC modulus to match"));
+    if &params.cpar.n != &params.hecpar.cs_params.n
+        || &params.cpar.n2 != &params.hecpar.cs_params.n2
+    {
+        return Err(CryptoError::InvalidInput(
+            "PoKS3 requires cpar and HEC modulus to match",
+        ));
     }
 
     let n = &params.hecpar.cs_params.n;
@@ -1127,10 +1151,24 @@ pub fn verify_poks3(
         return Ok(false);
     }
 
-    if !verify_poks3_decryption_equation(params, &z_hat.z_id, &z.y_id, &proof.r_z_id, &proof.z_sk, &e)? {
+    if !verify_poks3_decryption_equation(
+        params,
+        &z_hat.z_id,
+        &z.y_id,
+        &proof.r_z_id,
+        &proof.z_sk,
+        &e,
+    )? {
         return Ok(false);
     }
-    if !verify_poks3_decryption_equation(params, &z_hat.z_at, &z.y_at, &proof.r_z_at, &proof.z_sk, &e)? {
+    if !verify_poks3_decryption_equation(
+        params,
+        &z_hat.z_at,
+        &z.y_at,
+        &proof.r_z_at,
+        &proof.z_sk,
+        &e,
+    )? {
         return Ok(false);
     }
     verify_poks3_decryption_equation(
@@ -1153,8 +1191,12 @@ fn build_poks3_proof(
     z_hat: &HecEvalOutput,
     z: &HecEvalInput,
 ) -> CryptoResult<PpbDecProof> {
-    if &params.cpar.n != &params.hecpar.cs_params.n || &params.cpar.n2 != &params.hecpar.cs_params.n2 {
-        return Err(CryptoError::InvalidInput("PoKS3 requires cpar and HEC modulus to match"));
+    if &params.cpar.n != &params.hecpar.cs_params.n
+        || &params.cpar.n2 != &params.hecpar.cs_params.n2
+    {
+        return Err(CryptoError::InvalidInput(
+            "PoKS3 requires cpar and HEC modulus to match",
+        ));
     }
     if &z.y_id >= &params.hecpar.cs_params.n || &z.y_at >= &params.hecpar.cs_params.n {
         return Err(CryptoError::InvalidInput("PoKS3 plaintext must be in Z_n"));
@@ -1170,18 +1212,26 @@ fn build_poks3_proof(
     }
 
     let pk_expected = abs_qr_rep(
-        &params.hecpar.cs_params.g.modpow(&d.sk_e.x, &params.hecpar.cs_params.n2),
+        &params
+            .hecpar
+            .cs_params
+            .g
+            .modpow(&d.sk_e.x, &params.hecpar.cs_params.n2),
         &params.hecpar.cs_params.n2,
     );
     if &pk_expected != &pk_ah.k {
-        return Err(CryptoError::InvalidInput("PoKS3 witness does not match pkAH"));
+        return Err(CryptoError::InvalidInput(
+            "PoKS3 witness does not match pkAH",
+        ));
     }
 
     if !poks3_decryption_witness_holds(params, d, &z_hat.z_id, &z.y_id)?
         || !poks3_decryption_witness_holds(params, d, &z_hat.z_at, &z.y_at)?
         || !poks3_decryption_witness_holds(params, d, &z_hat.z_nf, &BigUint::zero())?
     {
-        return Err(CryptoError::InvalidInput("PoKS3 witness does not decrypt Z_hat to z"));
+        return Err(CryptoError::InvalidInput(
+            "PoKS3 witness does not decrypt Z_hat to z",
+        ));
     }
 
     let ell = derive_poks1_blinding_bits(params)?;
@@ -1251,20 +1301,28 @@ fn build_poks1_proof(
     coeff_randomness: &[BigUint],
 ) -> CryptoResult<PpbAuthProof> {
     if params.cpar.n != params.hecpar.cs_params.n || params.cpar.n2 != params.hecpar.cs_params.n2 {
-        return Err(CryptoError::InvalidInput("PoKS1 requires cpar and HEC modulus to match"));
+        return Err(CryptoError::InvalidInput(
+            "PoKS1 requires cpar and HEC modulus to match",
+        ));
     }
     if coeffs.is_empty() {
-        return Err(CryptoError::InvalidInput("PoKS1 coefficient vector must be non-empty"));
+        return Err(CryptoError::InvalidInput(
+            "PoKS1 coefficient vector must be non-empty",
+        ));
     }
     if coeffs.len() != x_public.encrypted_coeffs.len() || coeffs.len() != coeff_randomness.len() {
-        return Err(CryptoError::InvalidInput("PoKS1 coefficient/randomness length mismatch"));
+        return Err(CryptoError::InvalidInput(
+            "PoKS1 coefficient/randomness length mismatch",
+        ));
     }
 
     // Step 0.1: 检查 Cx 是否确实是系数向量承诺。这样可以避免 prover
     // 对错误语句生成“格式合法”的证明。
     let c_x_expected = commit_s1_vector(params, coeffs, r_x)?;
     if c_x_expected != *c_x {
-        return Err(CryptoError::InvalidInput("PoKS1 witness does not satisfy vector Cx"));
+        return Err(CryptoError::InvalidInput(
+            "PoKS1 witness does not satisfy vector Cx",
+        ));
     }
 
     // Step 0.2: 检查公开的每个 A_i 是否由保存的 rho_i 加密对应 P_i。
@@ -1273,9 +1331,12 @@ fn build_poks1_proof(
         .zip(coeff_randomness.iter())
         .zip(x_public.encrypted_coeffs.iter())
     {
-        let expected = enc_cs_with_randomness(&params.hecpar.cs_params, &x_public.pk_ah, coeff, rho)?;
+        let expected =
+            enc_cs_with_randomness(&params.hecpar.cs_params, &x_public.pk_ah, coeff, rho)?;
         if !ciphertext_eq_mod_n2(&expected, ct, &params.cpar.n2) {
-            return Err(CryptoError::InvalidInput("PoKS1 witness does not satisfy A_i encryption"));
+            return Err(CryptoError::InvalidInput(
+                "PoKS1 witness does not satisfy A_i encryption",
+            ));
         }
     }
 
@@ -1303,8 +1364,8 @@ fn build_poks1_proof(
     }
 
     let blind_bits = derive_poks1_blinding_bits(params)?;
-    let blind_bits_u64 =
-        u64::try_from(blind_bits).map_err(|_| CryptoError::InvalidInput("S1 blind bits too large"))?;
+    let blind_bits_u64 = u64::try_from(blind_bits)
+        .map_err(|_| CryptoError::InvalidInput("S1 blind bits too large"))?;
     let mut rng = OsRng;
     let mut current_c = c_x.clone();
     let mut current_rx = r_x.clone();
@@ -1341,7 +1402,9 @@ fn build_poks1_proof(
         let mut next_rhos = Vec::with_capacity(half);
         let mut next_ciphertexts = Vec::with_capacity(half);
         for i in 0..half {
-            next_bases.push((&bases[i] * bases[i + half].modpow(&beta, &params.cpar.n2)) % &params.cpar.n2);
+            next_bases.push(
+                (&bases[i] * bases[i + half].modpow(&beta, &params.cpar.n2)) % &params.cpar.n2,
+            );
             next_values.push((&beta * &values[i]) + &values[i + half]);
             next_rhos.push((&beta * &rhos[i]) + &rhos[i + half]);
             next_ciphertexts.push(fold_s1_ciphertexts(
@@ -1352,10 +1415,9 @@ fn build_poks1_proof(
             ));
         }
 
-        current_c = (current_c.modpow(&beta, &params.cpar.n2)
-            * l.modpow(&beta_sq, &params.cpar.n2)
-            * &r)
-            % &params.cpar.n2;
+        current_c =
+            (current_c.modpow(&beta, &params.cpar.n2) * l.modpow(&beta_sq, &params.cpar.n2) * &r)
+                % &params.cpar.n2;
         current_rx = (&beta * &current_rx) + (&beta_sq * &lambda) + &mu;
 
         rounds.push(PpbS1FoldRound { l, r });
@@ -1381,7 +1443,10 @@ fn build_poks1_proof(
         &rhos[0],
     )?;
 
-    Ok(PpbAuthProof { rounds, final_proof })
+    Ok(PpbAuthProof {
+        rounds,
+        final_proof,
+    })
 }
 
 /// 将 `y=(y_id, y_at)` 映射为 DF 承诺消息 `m_y`。
@@ -1646,9 +1711,7 @@ fn build_poks2_proof(
     // Step 6: 计算 `Z_nf = r3 ⊙ E_poly`，并用 `prove_cs_mult` 构造 `pi_nf`。
     let z_nf_expected = cs_homomorphic_scalar_mul(&e_poly, &r3, n2);
     if !ciphertext_eq_mod_n2(&z_nf_expected, &z_hat.z_nf, n2) {
-        return Err(CryptoError::InvalidInput(
-            "Z_nf does not match r3 ⊙ E_poly",
-        ));
+        return Err(CryptoError::InvalidInput("Z_nf does not match r3 ⊙ E_poly"));
     }
 
     let z_nf_wrapped = com_ah_with_zero_randomness(&params_ah, &z_hat.z_nf)?;
@@ -1671,7 +1734,8 @@ fn build_poks2_proof(
     // Step 7: 构造 `pi_id = {pi_id_enc, pi_id_mult, pi_id_add}`。
     //
     // 7.1 Enc(y_id; rid) 并证明加密正确。
-    let y_id_enc = enc_cs_with_randomness(&params.hecpar.cs_params, &pk_a.x_public.pk_ah, &y_id, &rid)?;
+    let y_id_enc =
+        enc_cs_with_randomness(&params.hecpar.cs_params, &pk_a.x_public.pk_ah, &y_id, &rid)?;
     let y_id_enc_wrapped_for_enc =
         wrap_ciphertext_for_cs_enc(&params_ah, &pk_a.x_public.pk_ah.k, &y_id, &rid, &y_id_enc)?;
     let y_id_enc_wrapped_for_add = com_ah_with_zero_randomness(&params_ah, &y_id_enc)?;
@@ -1741,7 +1805,8 @@ fn build_poks2_proof(
     };
 
     // Step 8: 构造 `pi_at`，流程与 Step 7 同构（把 y_id/r1 换成 y_at/r2）。
-    let y_at_enc = enc_cs_with_randomness(&params.hecpar.cs_params, &pk_a.x_public.pk_ah, &y_at, &rat)?;
+    let y_at_enc =
+        enc_cs_with_randomness(&params.hecpar.cs_params, &pk_a.x_public.pk_ah, &y_at, &rat)?;
     let y_at_enc_wrapped_for_enc =
         wrap_ciphertext_for_cs_enc(&params_ah, &pk_a.x_public.pk_ah.k, &y_at, &rat, &y_at_enc)?;
     let y_at_enc_wrapped_for_add = com_ah_with_zero_randomness(&params_ah, &y_at_enc)?;
@@ -1833,7 +1898,10 @@ fn build_poks2_proof(
 /// 1. `setup_cs_commit` 会随机采样 `g`；
 /// 2. 证明与验证必须使用同一个 `g`，否则所有 `CS-commit` 证明都会失配；
 /// 3. 因此在 `pi_U` 里显式携带 `ah_g`，验证侧据此重建同一组参数。
-fn build_cs_commit_params_from_user_proof(params: &PpbParams, ah_g: &BigUint) -> CryptoResult<CsCommitParams> {
+fn build_cs_commit_params_from_user_proof(
+    params: &PpbParams,
+    ah_g: &BigUint,
+) -> CryptoResult<CsCommitParams> {
     if params.cpar.n != params.hecpar.cs_params.n || params.cpar.n2 != params.hecpar.cs_params.n2 {
         return Err(CryptoError::InvalidInput(
             "PoKS2 requires cpar and hec CS modulus to match",
@@ -1862,7 +1930,10 @@ fn build_cs_commit_params_from_user_proof(params: &PpbParams, ah_g: &BigUint) ->
 ///
 /// 对应零随机数包装形式：
 /// `C1=c0, C2=1, C3=c1, C4=1`。
-fn build_enc_statement_commitment(params_ah: &CsCommitParams, ct: &crate::cs::CsCiphertext) -> CsCommitment {
+fn build_enc_statement_commitment(
+    params_ah: &CsCommitParams,
+    ct: &crate::cs::CsCiphertext,
+) -> CsCommitment {
     CsCommitment {
         c1: &ct.c0 % &params_ah.n2,
         c2: BigUint::one(),
@@ -1895,7 +1966,11 @@ fn pow_scalar_usize_for_verify(base: &BigUint, mut exp: usize) -> BigUint {
 /// 约定：
 /// 1. `power=1` 时直接返回根承诺 `Cy`；
 /// 2. `power=2^i` 时从 `aux.round=i` 的条目读取。
-fn lookup_cy_for_power_from_aux(power: usize, root_cy: &BigUint, aux: &[PoKAuxEntry]) -> CryptoResult<BigUint> {
+fn lookup_cy_for_power_from_aux(
+    power: usize,
+    root_cy: &BigUint,
+    aux: &[PoKAuxEntry],
+) -> CryptoResult<BigUint> {
     if power == 1 {
         return Ok(root_cy.clone());
     }
@@ -1907,7 +1982,9 @@ fn lookup_cy_for_power_from_aux(power: usize, root_cy: &BigUint, aux: &[PoKAuxEn
     let entry = aux
         .iter()
         .find(|e| e.round == round)
-        .ok_or(CryptoError::InvalidInput("aux does not contain required Cy(2^i)"))?;
+        .ok_or(CryptoError::InvalidInput(
+            "aux does not contain required Cy(2^i)",
+        ))?;
     Ok(entry.cy_2i.clone())
 }
 
@@ -1915,7 +1992,12 @@ fn lookup_cy_for_power_from_aux(power: usize, root_cy: &BigUint, aux: &[PoKAuxEn
 ///
 /// 与 `pok.rs::fs_alpha_for_pok_star` 保持完全相同的字段顺序，
 /// 防止挑战重建不一致。
-fn fs_alpha_for_pok_star_verify(c1: &CsCommitment, c2: &CsCommitment, c3: &CsCommitment, tau: &PoKTranscript) -> BigUint {
+fn fs_alpha_for_pok_star_verify(
+    c1: &CsCommitment,
+    c2: &CsCommitment,
+    c3: &CsCommitment,
+    tau: &PoKTranscript,
+) -> BigUint {
     let mut fields = vec![
         c1.c1.clone(),
         c1.c2.clone(),
@@ -1994,7 +2076,10 @@ fn append_cs_mult_proof_fields_for_pok_star(fields: &mut Vec<BigUint>, proof: &C
     fields.push(bigint_to_transcript_uint_ppb(&proof.z4));
 }
 
-fn append_round_to_tau_for_pok_star(tau: &PoKTranscript, round: &crate::pok::PoKStarRoundProof) -> PoKTranscript {
+fn append_round_to_tau_for_pok_star(
+    tau: &PoKTranscript,
+    round: &crate::pok::PoKStarRoundProof,
+) -> PoKTranscript {
     let mut history = tau.history.clone();
     append_commitment_fields_for_pok_star(&mut history, &round.c1);
     append_commitment_fields_for_pok_star(&mut history, &round.c2);
@@ -2474,7 +2559,13 @@ fn verify_enc_mul_add_component(
     if !verify_cs_enc(params_ah, &pk_ah.k, &proof.c_enc, c_plain, &proof.pi_enc)? {
         return Ok(false);
     }
-    if !verify_cs_mult(params_ah, &proof.c_mul, e_commitment, c_scalar, &proof.pi_mult)? {
+    if !verify_cs_mult(
+        params_ah,
+        &proof.c_mul,
+        e_commitment,
+        c_scalar,
+        &proof.pi_mult,
+    )? {
         return Ok(false);
     }
 
@@ -2525,9 +2616,7 @@ pub fn verify_poks2(
     }
 
     let c_y_from_cid_cat = (&proof.c_id * &proof.c_at) % n2;
-    if !proof.pi_y.relation_holds
-        || proof.pi_y.c_y_from_cid_cat != *c_y
-        || c_y_from_cid_cat != *c_y
+    if !proof.pi_y.relation_holds || proof.pi_y.c_y_from_cid_cat != *c_y || c_y_from_cid_cat != *c_y
     {
         return Ok(false);
     }
@@ -2863,7 +2952,10 @@ mod tests {
         assert_eq!(ppb.cpar.n2, ppb.hecpar.cs_params.n2);
         assert!(ppb.cpar.g < ppb.cpar.n2);
         assert!(ppb.cpar.h < ppb.cpar.n2);
-        assert_eq!(ppb.hecpar.cs_params.n2, &ppb.hecpar.cs_params.n * &ppb.hecpar.cs_params.n);
+        assert_eq!(
+            ppb.hecpar.cs_params.n2,
+            &ppb.hecpar.cs_params.n * &ppb.hecpar.cs_params.n
+        );
     }
 
     #[test]
@@ -2875,12 +2967,17 @@ mod tests {
     #[test]
     fn test_keygen_ppb_builds_pk_and_sk() {
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
         let s = BigUint::from(1u32);
 
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &s).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) =
+            keygen_ppb(&params, &fk, &x, &r_x, &s).expect("keygen ppb should succeed");
 
         assert_eq!(pk_a.x_public.encrypted_coeffs.len(), x.len() + 1);
         assert_eq!(pk_a.x_public.polynomial.len(), x.len() + 1);
@@ -2898,11 +2995,16 @@ mod tests {
     #[test]
     fn test_keygen_ppb_poks1_rejects_tampered_proof() {
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
 
-        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         // 篡改 PoKS1 最终 Schnorr 响应中的一个分量，应导致验证失败。
         pk_a.pi_a.final_proof.z_x += BigUint::from(1u32);
@@ -2919,7 +3021,8 @@ mod tests {
         let r_x = BigUint::from(19u32);
         let s = BigUint::from(1u32);
 
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &s).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) =
+            keygen_ppb(&params, &fk, &x, &r_x, &s).expect("keygen ppb should succeed");
 
         // 方案 A 中，c_x 承诺的是 HECenc 实际加密的掩码多项式系数。
         // 这些系数不再等同于原始 roots，因此这里用 PoKS1 验证公开承诺
@@ -2941,17 +3044,23 @@ mod tests {
         let fk = HecFunctionKey { n: 3, k: 1 };
         let r_x = BigUint::from(17u32);
 
-        let err = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect_err("mismatched length should be rejected");
+        let err = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect_err("mismatched length should be rejected");
         assert_eq!(err, CryptoError::InvalidInput("fk.n must equal x.len()"));
     }
 
     #[test]
     fn test_escrow_ppb_returns_output_and_cy() {
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -2965,7 +3074,8 @@ mod tests {
 
         let m_y = map_y_to_df_message(&y, &params.cpar.n).expect("map y should succeed");
         let r_y_mod = &r_y % &params.cpar.n;
-        let c_y_expected = commit_df_with_opening(&params.cpar, &m_y, &r_y_mod).expect("commit y should succeed");
+        let c_y_expected =
+            commit_df_with_opening(&params.cpar, &m_y, &r_y_mod).expect("commit y should succeed");
 
         assert_eq!(out.c_y, c_y_expected.c);
         assert!(out.pi_u.pi_y.relation_holds);
@@ -2978,7 +3088,8 @@ mod tests {
         let x = vec![BigUint::from(3u32), BigUint::from(8u32)];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(19u32);
-        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         // 把 Cx 篡改到群外范围，触发 VerPK 失败。
         pk_a.c_x = params.cpar.n2.clone();
@@ -2996,10 +3107,15 @@ mod tests {
     #[test]
     fn test_escrow_ppb_returns_none_when_fk_mismatch_with_x() {
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(31u32);
-        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         // 篡改公钥内 fk，使其与 X 的系数规模不一致，VerPK 应拒绝。
         pk_a.fk.n = 0;
@@ -3024,10 +3140,15 @@ mod tests {
         // 这个测试的意义是：
         // - 确保验证器不会“误拒绝”真实证明（避免 false negative）。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -3056,10 +3177,15 @@ mod tests {
         // 这个测试的意义是：
         // - 确保验证器不会“误接受”被篡改证明（避免 false positive）。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -3073,7 +3199,8 @@ mod tests {
 
         // 只篡改一个公共承诺字段即可破坏证明语句一致性。
         // 这里等价于把“r1 ⊙ E_poly 的承诺语句”换成了另一个值。
-        out.pi_u.pi_id.c_mul.c1 = (&out.pi_u.pi_id.c_mul.c1 + BigUint::from(1u32)) % &params.cpar.n2;
+        out.pi_u.pi_id.c_mul.c1 =
+            (&out.pi_u.pi_id.c_mul.c1 + BigUint::from(1u32)) % &params.cpar.n2;
 
         let ok = verify_poks2(&params, &pk_a, &out.c_y, &out).expect("verify should run");
         // false 条件：任一子证明验证失败（这里会在 pi_id 的 mult/add 链路失败）。
@@ -3082,7 +3209,11 @@ mod tests {
 
     fn valid_poks2_fixture() -> (PpbParams, PpbPublicKey, PpbEscrowOutput) {
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
         let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
@@ -3177,10 +3308,15 @@ mod tests {
     fn test_verify_escrow_accepts_valid_output() {
         // 正例：VerPK 和 VS2 都成立，VerEscrow 应返回 true。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -3200,10 +3336,15 @@ mod tests {
     fn test_verify_escrow_rejects_when_verpk_fails() {
         // 反例 1：先破坏 pkA 使 VerPK 失败，VerEscrow 必须返回 false。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (mut pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -3226,10 +3367,15 @@ mod tests {
     fn test_verify_escrow_rejects_when_vs2_fails() {
         // 反例 2：保留合法 pkA，但篡改 pi_U 子语句使 VS2 失败，VerEscrow 应返回 false。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (pk_a, _sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -3242,7 +3388,8 @@ mod tests {
             .expect("escrow output should exist");
 
         // 篡改 VS2 语句的一部分：pi_id 中 mult 的承诺项。
-        out.pi_u.pi_id.c_mul.c1 = (&out.pi_u.pi_id.c_mul.c1 + BigUint::from(1u32)) % &params.cpar.n2;
+        out.pi_u.pi_id.c_mul.c1 =
+            (&out.pi_u.pi_id.c_mul.c1 + BigUint::from(1u32)) % &params.cpar.n2;
 
         let ok = verify_escrow(&params, &pk_a, &out.c_y, &out).expect("verify escrow should run");
         assert!(!ok);
@@ -3252,10 +3399,15 @@ mod tests {
     fn test_dec_ppb_returns_output_and_valid_poks3() {
         // 正例：VerEscrow 通过后，Dec 应返回 (z, pi_Z)，且 PoKS3 可验证。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -3271,7 +3423,9 @@ mod tests {
             .expect("ver escrow should pass");
 
         // 命中场景下应能恢复出身份与属性。
-        let z = dec_out.z.expect("hec dec should output identity in this case");
+        let z = dec_out
+            .z
+            .expect("hec dec should output identity in this case");
         assert_eq!(z.y_id, y.y_id % &params.cpar.n);
         assert_eq!(z.y_at, y.y_at % &params.cpar.n);
 
@@ -3291,10 +3445,15 @@ mod tests {
     fn test_dec_ppb_returns_none_when_verescrow_fails() {
         // 反例：若 VerEscrow 失败，Dec 必须返回 None（算法中的 ⊥）。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -3316,10 +3475,15 @@ mod tests {
     fn test_verify_poks3_rejects_tampered_proof() {
         // 反例：篡改 PoKS3 响应后，verify_poks3 必须拒绝。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -3336,7 +3500,10 @@ mod tests {
 
         dec_out.pi_z.z_md += BigInt::from(1u32);
 
-        let z = dec_out.z.as_ref().expect("hec dec should output identity in this case");
+        let z = dec_out
+            .z
+            .as_ref()
+            .expect("hec dec should output identity in this case");
         let ok = verify_poks3(
             &params,
             &pk_a.x_public.pk_ah,
@@ -3353,10 +3520,15 @@ mod tests {
     fn test_judge_ppb_accepts_valid_tuple() {
         // 正例：VS3、VerPK、VerEscrow 同时通过，Judge 必须返回 true。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -3387,10 +3559,15 @@ mod tests {
     fn test_judge_ppb_rejects_when_pi_z_is_tampered() {
         // 反例：VS3 失败（篡改 pi_Z）时，Judge 必须返回 false。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),
@@ -3423,10 +3600,15 @@ mod tests {
     fn test_judge_ppb_rejects_when_cx_or_cy_mismatch() {
         // 反例：第 4/5 步输入与语句不一致时，Judge 必须返回 false。
         let params = setup_ppb(64, &(), &(), &()).expect("setup ppb should succeed");
-        let x = vec![BigUint::from(5u32), BigUint::from(11u32), BigUint::from(13u32)];
+        let x = vec![
+            BigUint::from(5u32),
+            BigUint::from(11u32),
+            BigUint::from(13u32),
+        ];
         let fk = HecFunctionKey { n: x.len(), k: 1 };
         let r_x = BigUint::from(37u32);
-        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32)).expect("keygen ppb should succeed");
+        let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &BigUint::from(1u32))
+            .expect("keygen ppb should succeed");
 
         let y = HecEvalInput {
             y_id: BigUint::from(11u32),

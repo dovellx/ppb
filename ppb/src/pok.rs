@@ -8,7 +8,7 @@ use crate::cs_commit::{
     CsCommitmentWithOpening, CsMultProof, commit_cs, prove_cs_add, prove_cs_com,
     prove_cs_com_ciphertext, prove_cs_mult,
 };
-use crate::df::{DfParams, commit_df};
+use crate::df::{DfParams, commit_df, commit_df_with_opening};
 use crate::error::{CryptoError, CryptoResult};
 use crate::hash::fiat_shamir_challenge_biguints;
 use crate::math::{derive_b_bits_from_n2, modinv};
@@ -86,15 +86,122 @@ impl CiphertextPolynomial {
         }
     }
 
-    /// 利用密文同态加法和标量乘法求多项式在 y 处的值。
+    /// 求值所需的折叠轮数 `ceil(log2(len))`。
+    pub fn required_rounds(len: usize) -> usize {
+        if len <= 1 {
+            0
+        } else {
+            (len - 1).ilog2() as usize + 1
+        }
+    }
+
+    /// 构造 `Z_n` 上的平方链 `[y, y^2, y^4, ..., y^{2^{rounds-1}}] (mod n)`。
     ///
-    /// 实现采用 Horner 形式：
-    /// f(y) = (...((x_{n-1} * y + x_{n-2}) * y + ...) * y + x_0)
+    /// 论文 Sec 2.2 把 `y ⊙ a` 定义为“把同态加法做 y 次”，而 Sec 4.1 明确
+    /// Camenisch-Shoup 的消息空间是 `M = Z_n`。因此 Alg. 2 第 11 行里的
+    /// `y^{n/2}` 指的是 **`Z_n` 中的元素**，链上每一项都必须模 n 约简。
+    pub fn reduced_power_chain(
+        y: &Scalar,
+        n: &BigUint,
+        rounds: usize,
+    ) -> CryptoResult<Vec<Scalar>> {
+        if n.is_zero() {
+            return Err(CryptoError::InvalidInput("modulus n must be non-zero"));
+        }
+        let mut chain = Vec::with_capacity(rounds);
+        if rounds == 0 {
+            return Ok(chain);
+        }
+        let mut cur = y % n;
+        chain.push(cur.clone());
+        for _ in 1..rounds {
+            cur = (&cur * &cur) % n;
+            chain.push(cur.clone());
+        }
+        Ok(chain)
+    }
+
+    /// 按 Algorithm 2 的**折叠结构**求值（这是协议路径应当使用的求值）。
     ///
-    /// 优点：
-    /// 1. 避免显式维护 y^i；
-    /// 2. 运算次数为 O(n) 且逻辑清晰；
-    /// 3. 每步都只调用“密文加法 + 标量乘法”两种基础同态操作。
+    /// 记 `ŝ_k = y^{2^k} mod n`，本函数计算
+    ///
+    /// ```text
+    /// vec = coeffs;  for k = L-1 down to 0:  vec[j] <- vec[j] ⊕ (vec[j+m/2] ⊙ ŝ_k)
+    /// ```
+    ///
+    /// 等价于 `E = ⊕_i c_i ⊙ u_i`，其中 `u_i = Π_{k ∈ bits(i)} ŝ_k`。
+    ///
+    /// 为什么必须是这个结构而不是 Horner：
+    /// Alg. 2 的递归展开后要求相邻两层的指数向量满足 `u_{j+m/2} = u'_j · s`
+    /// （整数乘法），自底向上即 `u_i = Π_{k∈bits(i)} s_k`。用本函数求值时
+    /// `s_k = ŝ_k` 全部有界（≤ |n| 位），每层 `e2 = e3 ⊙ ŝ_k` 精确成立；
+    /// 而 Horner 求值给出的是精确整数幂 `y^i`，会反过来逼迫 aux 链承诺
+    /// `y^{2^k}` 的**精确整数**，见证按 `2^k` 爆炸（本该 O(log n) 的部分退化成 O(n)），
+    /// 同时击穿 Σ 协议的掩码。
+    ///
+    /// 由于 `u_i ≡ y^i (mod n)`，本函数与 Horner 求值**解密到同一明文**，
+    /// 只是密文代表元不同——论文关系 `R_f` 要求的正是
+    /// “`c_f ∈ Enc(pk, f(...))`”（是该明文的一个加密），故两者都满足关系。
+    ///
+    /// 系数个数不是 2 的幂时，按论文脚注 14 补齐：用固定随机数加密的 0，
+    /// 即 `Enc(pk, 0; 0) = (1, 1)`，它对 `⊕`/`⊙` 都是单位元。
+    pub fn evaluate_with_powers(
+        &self,
+        powers: &[Scalar],
+    ) -> CryptoResult<CamenischShoupCiphertext> {
+        let rounds = Self::required_rounds(self.coeffs.len());
+        if powers.len() < rounds {
+            return Err(CryptoError::InvalidInput(
+                "not enough y-powers for folded evaluation",
+            ));
+        }
+
+        let one = CamenischShoupCiphertext {
+            c0: BigUint::one(),
+            c1: BigUint::one(),
+        };
+        if self.coeffs.is_empty() {
+            return Ok(one);
+        }
+
+        let mut vec = self.coeffs.clone();
+        vec.resize(1usize << rounds, one);
+
+        for k in (0..rounds).rev() {
+            let half = vec.len() / 2;
+            let mut next = Vec::with_capacity(half);
+            for j in 0..half {
+                let scaled =
+                    Self::homomorphic_scalar_mul(&vec[j + half], &powers[k], &self.n2);
+                next.push(Self::homomorphic_add(&vec[j], &scaled, &self.n2));
+            }
+            vec = next;
+        }
+
+        Ok(vec.into_iter().next().unwrap_or_else(|| CamenischShoupCiphertext {
+            c0: BigUint::one(),
+            c1: BigUint::one(),
+        }))
+    }
+
+    /// `evaluate_with_powers` 的便捷版本：内部构造 `Z_n` 平方链。
+    pub fn evaluate_mod_n(
+        &self,
+        y: &Scalar,
+        n: &BigUint,
+    ) -> CryptoResult<CamenischShoupCiphertext> {
+        let rounds = Self::required_rounds(self.coeffs.len());
+        let powers = Self::reduced_power_chain(y, n, rounds)?;
+        self.evaluate_with_powers(&powers)
+    }
+
+    /// Horner 求值：`f(y) = (...((x_{n-1}·y + x_{n-2})·y + ...)·y + x_0)`。
+    ///
+    /// ⚠️ **不要在证明路径上使用本函数**。它展开后是 `E = ⊕ c_i ⊙ y^i`，
+    /// 指数是**精确整数幂**，与 Algorithm 2 的折叠结构不匹配，
+    /// 会迫使 aux 链承诺爆炸性增长的整数（见 `evaluate_with_powers` 的说明）。
+    /// 协议路径请用 [`Self::evaluate_mod_n`] / [`Self::evaluate_with_powers`]。
+    /// 本函数保留给“只关心解密结果”的场合（两者解密到同一明文）。
     pub fn evaluate(&self, y: &Scalar) -> CamenischShoupCiphertext {
         let mut iter = self.coeffs.iter().rev();
         let Some(last) = iter.next() else {
@@ -168,16 +275,25 @@ impl CiphertextPolynomial {
     }
 }
 
-/// 单轮 y^(2^i) 承诺辅助数据。
+/// Alg. 1 第 2 行的 aux 条目，外加论文 Remark 1 要求的模 n 归约见证。
 ///
-/// 字段说明：
-/// 1. round: 当前轮次 i（从 1 开始）
-/// 2. cy_2i: 对 y^(2^i) 的 DF 承诺值
-/// 3. pi_y2i: 连接前一轮与当前轮的平方关系 NIZK 证明
-#[derive(Debug, Clone)]
+/// 字段语义：
+/// 1. `cy_2i` = `Com(ŝ_i; r_i)`，其中 `ŝ_i = y^{2^i} mod n`（**已约简**）；
+/// 2. `c_w`   = `Com(ŝ_{i-1}^2; ρ_w)`，未约简的平方值，`pi_y2i` 证明的是它；
+/// 3. `c_k`   = `Com(k; ρ_k)`，其中 `ŝ_{i-1}^2 = ŝ_i + k·n`。
+///
+/// 证明者取 `ρ_w = r_i + n·ρ_k`，于是
+/// `C_w == C_{ŝ_i} · C_k^n (mod n²)` 成为**代数恒等式**，
+/// 验证方只需一次以 `n` 为指数的 modpow，不需要额外的 Σ 协议。
+/// 这正是论文 Remark 1 所说的
+/// “proving that a remainder of n in a commitment is equal to the original
+///  commitment summed with a multiple of n”。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoKAuxEntry {
     pub round: usize,
     pub cy_2i: BigUint,
+    pub c_w: BigUint,
+    pub c_k: BigUint,
     pub pi_y2i: ProveMultProof,
 }
 
@@ -344,22 +460,6 @@ fn df_params_from_ah(params_ah: &CsCommitParams) -> DfParams {
         g: params_ah.g_prime.clone(),
         h: params_ah.h_prime.clone(),
     }
-}
-
-/// 在整数域计算 base^exp（exp 为 usize）。
-fn pow_scalar_usize(base: &Scalar, mut exp: usize) -> Scalar {
-    let mut result = BigUint::one();
-    let mut cur = base.clone();
-    while exp > 0 {
-        if (exp & 1) == 1 {
-            result *= &cur;
-        }
-        exp >>= 1;
-        if exp > 0 {
-            cur = &cur * &cur;
-        }
-    }
-    result
 }
 
 /// 查询 `y^(power)` 的 DF 承诺与开口随机数。
@@ -851,7 +951,7 @@ fn pok_star_recursive(
     params_ah: &CsCommitParams,
     params_df_for_alpha: &DfParams,
     r_y: &BigUint,
-    y: &BigUint,
+    powers: &[BigUint],
     c_p: &CsCiphertext,
     r_p: &CsCommitOpening,
     cy: &BigUint,
@@ -882,14 +982,23 @@ fn pok_star_recursive(
     let (lower_poly, upper_poly) = poly.split_in_half();
 
     // 2) 计算三组关键中间密文值：
-    //    e1 = sum x_i * y^i (lower)
-    //    e3 = sum x_{i+n/2} * y^i (upper lowered)
-    //    e2 = y^(n/2) ⊙ e3
-    let e1 = lower_poly.evaluate(y);
-    let e3 = upper_poly.evaluate(y);
-
+    //    e1 = sum x_i ⊙ u_i        (lower)
+    //    e3 = sum x_{i+n/2} ⊙ u_i  (upper lowered)
+    //    e2 = ŝ_k ⊙ e3             其中 2^k = n/2
+    //
+    // 关键：两个半边都用**同一套折叠求值**（powers[..k]），因此
+    // `e2 = e3 ⊙ ŝ_k` 在群层面精确成立，无需任何修正因子。
     let half = poly.len() / 2;
-    let y_half = pow_scalar_usize(y, half);
+    let k = half.ilog2() as usize;
+    if powers.len() <= k {
+        return Err(CryptoError::InvalidInput(
+            "power chain too short for current recursion level",
+        ));
+    }
+    let e1 = lower_poly.evaluate_with_powers(&powers[..k])?;
+    let e3 = upper_poly.evaluate_with_powers(&powers[..k])?;
+
+    let y_half = powers[k].clone();
     let e2 = CiphertextPolynomial::homomorphic_scalar_mul(&e3, &y_half, &params_ah.n2);
 
     // 用当前层语句检查 e = e1 ⊕ e2 是否匹配，避免“错误实例”继续递归。
@@ -922,8 +1031,10 @@ fn pok_star_recursive(
     );
 
     // 6) 构造降阶后的折叠多项式并求其值 e'。
+    //    e' = e1 ⊕ (α ⊙ e3) = ⊕_j (C_j ⊕ (C_{j+m/2} ⊙ α)) ⊙ u_j，
+    //    与下一层用同一套 powers[..k] 求值的结果一致。
     let folded_poly = lower_poly.fold(&upper_poly, &alpha);
-    let e_prime = folded_poly.evaluate(y);
+    let e_prime = folded_poly.evaluate_with_powers(&powers[..k])?;
 
     // 7) 对 e' 承诺，得到 C'_P。
     let c_p_prime_with_open = commit_cs(params_ah, &e_prime, cs_rand_bits)?;
@@ -1041,7 +1152,7 @@ fn pok_star_recursive(
         params_ah,
         params_df_for_alpha,
         r_y,
-        y,
+        powers,
         &e_prime,
         &c_p_prime_with_open.opening,
         cy,
@@ -1066,7 +1177,7 @@ fn pok_star_recursive(
 fn pok_star_p(
     params_ah: &CsCommitParams,
     r_y: &BigUint,
-    y: &BigUint,
+    powers: &[BigUint],
     c_p: &CsCiphertext,
     r_p: &CsCommitOpening,
     cy: &BigUint,
@@ -1091,7 +1202,7 @@ fn pok_star_p(
         params_ah,
         &params_df_for_alpha,
         r_y,
-        y,
+        powers,
         c_p,
         r_p,
         cy,
@@ -1143,44 +1254,67 @@ pub fn pokp(
     let c_p_wrapped = com_ah_with_zero_randomness(params_ah, c_p)?;
 
     // Step 2: 构造 y^(2^i) 承诺序列，并生成每轮关系证明 pi_y2i。
+    //
+    // 与最初实现的两点差别：
+    //
+    // 1. **链上的值全部模 n 约简**（论文 Sec 4.1：消息空间 M = Z_n）。
+    //    每轮把 `w = ŝ_{i-1}^2` 拆成 `w = ŝ_i + k·n`，并额外承诺 `w` 与 `k`。
+    //    取 `ρ_w = r_i + n·ρ_k` 后 `C_w == C_{ŝ_i}·C_k^n` 是代数恒等式，
+    //    这就是论文 Remark 1 要求的“模 n 运算证明”，不需要额外 Σ 协议。
+    //    `prove_mult` 证明的仍是整数平方关系，但对象换成了有界的 `C_w`
+    //    （见证 `ŝ_{i-1}` ≤ |n| 位，`w` ≤ 2|n| 位），Σ 协议掩码因此重新够用。
+    //
+    // 2. **只生成 rounds-1 条**。最高层的 half = len/2 = 2^{rounds-1}，
+    //    所以 `lookup_cy_for_power` 最多用到 round = rounds-1；
+    //    原来多生成的第 rounds 条（对应 y^{len}）从未被使用，纯属浪费，
+    //    而且在未约简的旧实现里它恰好是整条链上最贵的一条。
     let rounds = c_values.len().ilog2() as usize;
-    let mut aux = Vec::with_capacity(rounds);
-    let mut aux_openings = Vec::with_capacity(rounds);
+    let aux_rounds = rounds.saturating_sub(1);
+    let mut aux = Vec::with_capacity(aux_rounds);
+    let mut aux_openings = Vec::with_capacity(aux_rounds);
 
-    let mut prev_z = y.clone();
+    let powers = CiphertextPolynomial::reduced_power_chain(y, &params_df.n, rounds)?;
+
     let mut prev_cy = cy.clone();
     let mut prev_r = r_y.clone();
 
-    for i in 1..=rounds {
-        let z2 = &prev_z * &prev_z;
-        let cy2i = commit_df(params_df, &z2, df_randomness_bits)?;
+    for i in 1..=aux_rounds {
+        let prev_z = &powers[i - 1];
+        let w = prev_z * prev_z;
+        let k = &w / &params_df.n;
 
-        // 按算法调用 NIZK 链接证明：
-        // pi_y2i <- NIZK[(z,r_{i-1},r_i): Cy2i-1=Com(z;r_{i-1}) ∧ Cy2i=Com(z^2;r_i)]
+        // ŝ_i 与 k 各自独立取开口随机数；ρ_w 由二者线性确定。
+        let c_next = commit_df(params_df, &powers[i], df_randomness_bits)?;
+        let c_k = commit_df(params_df, &k, df_randomness_bits)?;
+        let rho_w = &c_next.r + &params_df.n * &c_k.r;
+        let c_w = commit_df_with_opening(params_df, &w, &rho_w)?;
+
+        // pi_y2i <- NIZK[(z,r_{i-1},ρ_w): C_{ŝ_{i-1}}=Com(z;r_{i-1}) ∧ C_w=Com(z^2;ρ_w)]
         let pi_y2i = prove_mult_with_lambda(
             params_df,
             &prev_cy,
             &prev_r,
-            &cy2i.c,
-            &cy2i.r,
-            &prev_z,
+            &c_w.c,
+            &rho_w,
+            prev_z,
             params_ah.lambda_bits,
         )?;
 
         aux.push(PoKAuxEntry {
             round: i,
-            cy_2i: cy2i.c.clone(),
+            cy_2i: c_next.c.clone(),
+            c_w: c_w.c.clone(),
+            c_k: c_k.c.clone(),
             pi_y2i,
         });
         aux_openings.push(PoKAuxOpeningEntry {
             round: i,
-            cy_2i: cy2i.c.clone(),
-            r_i: cy2i.r.clone(),
+            cy_2i: c_next.c.clone(),
+            r_i: c_next.r.clone(),
         });
 
-        prev_z = z2;
-        prev_cy = cy2i.c;
-        prev_r = cy2i.r;
+        prev_cy = c_next.c;
+        prev_r = c_next.r;
     }
 
     // Step 3: 初始化 tau。
@@ -1195,7 +1329,7 @@ pub fn pokp(
     let recursive_proof = pok_star_p(
         params_ah,
         r_y,
-        y,
+        &powers,
         c_p,
         &c_p_wrapped.opening,
         cy,
@@ -1218,7 +1352,7 @@ mod tests {
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::cs::{enc_cs, keygen_cs, setup_cs};
+    use crate::cs::{dec_cs, enc_cs, keygen_cs, setup_cs};
     use crate::df::DfParams;
     use crate::df::commit_df_with_opening;
     use crate::math::sample_unit_mod_n2;
@@ -1407,6 +1541,178 @@ mod tests {
         match proof.recursive_proof {
             PoKStarProof::Recursive { .. } => {}
             _ => panic!("expected recursive PoK*_P proof for degree-1 polynomial"),
+        }
+    }
+
+    /// 构造一组测试用的 CS/DF 参数与随机系数多项式。
+    ///
+    /// 关键：`y` 必须取 `Z_n` 中的**满位长随机值**。用 3、5 这种小整数会让
+    /// `y^{2^k}` 的精确整数幂也只有几十位，未约简标量的问题会被完全掩盖
+    /// ——这正是最初的实现能通过全部测试的原因。
+    fn folded_eval_fixture(
+        bits: usize,
+        coeffs: usize,
+    ) -> (
+        crate::cs::CsParams,
+        crate::cs::CsSecretKey,
+        Vec<BigUint>,
+        CiphertextPolynomial,
+        BigUint,
+    ) {
+        use num_bigint::RandBigInt;
+        let cs_params = setup_cs(bits).expect("setup cs should succeed");
+        let (pk, sk) = keygen_cs(&cs_params).expect("keygen should succeed");
+        let mut rng = rand::rngs::OsRng;
+
+        let plain: Vec<BigUint> = (0..coeffs)
+            .map(|_| rng.gen_biguint_below(&cs_params.n))
+            .collect();
+        let cts: Vec<CsCiphertext> = plain
+            .iter()
+            .map(|m| enc_cs(&cs_params, &pk, m).expect("enc should succeed"))
+            .collect();
+        let poly = CiphertextPolynomial::new(cts, &cs_params.n2).expect("poly should build");
+        let y = rng.gen_biguint_below(&cs_params.n);
+        (cs_params, sk, plain, poly, y)
+    }
+
+    #[test]
+    fn test_reduced_power_chain_is_bounded() {
+        use num_bigint::RandBigInt;
+        let cs_params = setup_cs(128).expect("setup cs should succeed");
+        let mut rng = rand::rngs::OsRng;
+        let y = rng.gen_biguint_below(&cs_params.n);
+
+        let chain = CiphertextPolynomial::reduced_power_chain(&y, &cs_params.n, 10)
+            .expect("chain should build");
+        assert_eq!(chain.len(), 10);
+        assert_eq!(chain[0], &y % &cs_params.n);
+        for (i, s) in chain.iter().enumerate() {
+            // 论文 Sec 4.1：消息空间 M = Z_n，链上每一项都必须落在 Z_n 内。
+            assert!(s < &cs_params.n, "chain[{i}] escaped Z_n");
+            if i > 0 {
+                assert_eq!(*s, (&chain[i - 1] * &chain[i - 1]) % &cs_params.n);
+            }
+        }
+    }
+
+    #[test]
+    fn test_folded_evaluation_matches_horner_plaintext() {
+        let (cs_params, sk, plain, poly, y) = folded_eval_fixture(128, 8);
+
+        let folded = poly
+            .evaluate_mod_n(&y, &cs_params.n)
+            .expect("folded evaluation should succeed");
+        let horner = poly.evaluate(&y);
+
+        // 明文侧真值 Σ x_i y^i mod n。
+        let mut expected = BigUint::zero();
+        let mut ypow = BigUint::one();
+        for m in &plain {
+            expected = (expected + m * &ypow) % &cs_params.n;
+            ypow = (&ypow * &y) % &cs_params.n;
+        }
+
+        let d_folded = dec_cs(&cs_params, &sk, &folded).expect("decrypt folded");
+        let d_horner = dec_cs(&cs_params, &sk, &horner).expect("decrypt horner");
+        assert_eq!(d_folded, expected, "折叠求值必须解密到 Σ x_i y^i mod n");
+        assert_eq!(d_horner, expected);
+
+        // 两者是同一明文的不同密文代表元——论文 R_f 只要求
+        // “c_f ∈ Enc(pk, f(...))”，故两者都满足关系。
+        assert!(folded.c0 != horner.c0 || folded.c1 != horner.c1);
+    }
+
+    #[test]
+    fn test_folded_evaluation_satisfies_level_relation() {
+        // Alg. 2 第 11 行要求 e2 = ŝ_k ⊙ e3 在**群层面精确成立**，
+        // 这正是 verify_cs_mult 检查的关系。折叠求值让它自动成立，
+        // 而 Horner 求值只能靠精确整数幂勉强对齐。
+        let (cs_params, _sk, _plain, poly, y) = folded_eval_fixture(128, 8);
+        let rounds = CiphertextPolynomial::required_rounds(poly.len());
+        let powers = CiphertextPolynomial::reduced_power_chain(&y, &cs_params.n, rounds)
+            .expect("chain should build");
+
+        let mut current = poly.clone();
+        for k in (0..rounds).rev() {
+            let (lower, upper) = current.split_in_half();
+            let e3 = upper
+                .evaluate_with_powers(&powers[..k])
+                .expect("e3 should evaluate");
+
+            // e2 的定义是 u_{j+m/2} = u_j · ŝ_k，即把上半边每一项的指数整体抬高一档。
+            // 断言：对 e3 做一次 ŝ_k 标量乘，恰好等于按定义逐项算出来的 e2。
+            let e3_scaled =
+                CiphertextPolynomial::homomorphic_scalar_mul(&e3, &powers[k], &cs_params.n2);
+
+            let mut manual = CsCiphertext {
+                c0: BigUint::one(),
+                c1: BigUint::one(),
+            };
+            for (j, ct) in upper.coeffs().iter().enumerate() {
+                let mut u = powers[k].clone();
+                for (t, p) in powers[..k].iter().enumerate() {
+                    if (j >> t) & 1 == 1 {
+                        u *= p;
+                    }
+                }
+                let scaled =
+                    CiphertextPolynomial::homomorphic_scalar_mul(ct, &u, &cs_params.n2);
+                manual =
+                    CiphertextPolynomial::homomorphic_add(&manual, &scaled, &cs_params.n2);
+            }
+            assert_eq!(e3_scaled.c0, manual.c0, "level {k}: e2 = e3 ⊙ ŝ_k 必须精确成立");
+            assert_eq!(e3_scaled.c1, manual.c1, "level {k}: e2 = e3 ⊙ ŝ_k 必须精确成立");
+
+            current = lower.fold(&upper, &powers[k]);
+        }
+    }
+
+    #[test]
+    fn test_pokp_aux_chain_is_reduced_and_logarithmic() {
+        use num_bigint::RandBigInt;
+        let coeffs = 8usize;
+        let (cs_params, _sk, _plain, poly, y) = folded_eval_fixture(128, coeffs);
+        let mut rng = rand::rngs::OsRng;
+
+        let df_params = DfParams {
+            n: cs_params.n.clone(),
+            n2: cs_params.n2.clone(),
+            g: sample_unit_mod_n2(&mut rng, &cs_params.n2),
+            h: sample_unit_mod_n2(&mut rng, &cs_params.n2),
+        };
+        let params_ah = setup_cs_commit(128, &cs_params, &df_params).expect("cs commit setup");
+
+        let c_p = poly
+            .evaluate_mod_n(&y, &cs_params.n)
+            .expect("folded evaluation");
+        let r_y = rng.gen_biguint(256);
+        let cy = (df_params.g.modpow(&y, &df_params.n2)
+            * df_params.h.modpow(&r_y, &df_params.n2))
+            % &df_params.n2;
+
+        let proof = pokp(
+            &params_ah,
+            &df_params,
+            &r_y,
+            &y,
+            &cy,
+            poly.coeffs(),
+            &c_p,
+            384,
+        )
+        .expect("PoKP should run to completion");
+
+        // aux 只需覆盖到 round = log2(n)-1；多生成的那一条从未被使用。
+        let rounds = coeffs.ilog2() as usize;
+        assert_eq!(proof.aux.len(), rounds - 1);
+
+        for (idx, entry) in proof.aux.iter().enumerate() {
+            assert_eq!(entry.round, idx + 1);
+            // 论文 Remark 1 的模 n 归约恒等式：C_w == C_{ŝ_i} · C_k^n。
+            let rhs = (&entry.cy_2i * entry.c_k.modpow(&df_params.n, &df_params.n2))
+                % &df_params.n2;
+            assert_eq!(rhs, entry.c_w, "aux[{idx}] 违反 Remark 1 归约恒等式");
         }
     }
 }

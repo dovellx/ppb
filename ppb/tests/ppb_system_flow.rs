@@ -1,4 +1,5 @@
-use num_bigint::BigUint;
+use num_bigint::{BigUint, RandBigInt};
+use rand::rngs::OsRng;
 
 use rust::{
     HecEvalInput, HecFunctionKey, dec_ppb, escrow_ppb, judge_ppb, keygen_ppb, setup_ppb,
@@ -62,6 +63,60 @@ fn test_ppb_system_full_flow_in_order() {
     assert!(poks3_ok);
 
     // 5) judge：最终裁决合取验证（VS3 ∧ VerPK ∧ VerEscrow）应为真。
+    let judge_ok = judge_ppb(
+        &params,
+        &pk_a,
+        &pk_a.c_x,
+        &escrow_out.c_y,
+        &escrow_out,
+        &dec_out.z,
+        &dec_out.pi_z,
+    )
+    .expect("judge should run");
+    assert!(judge_ok);
+}
+
+/// 端到端回归：名单与身份都取 `Z_n` 中的**满位长随机值**。
+///
+/// 为什么单独立一条：本文件其余测试用的都是 5、11、13 这种小整数，
+/// 而 `y_id` 很小时 `y^{2^k}` 的精确整数幂也只有几十位——
+/// 早期实现里“未约简整数幂”导致的见证爆炸会被这种输入完全掩盖，
+/// 全部测试照样通过。这条测试固定住真实规模的输入。
+///
+/// 注意约束 `y_id + y_at < n`：现有实现中 `m_y = (y_id+y_at) mod n`
+/// 而 `C_id·C_at = Com(y_id+y_at)` 用的是整数和，两者只在不溢出时相等。
+#[test]
+fn test_ppb_system_full_flow_with_full_size_inputs() {
+    let params = setup_ppb(128, &(), &(), &()).expect("setup should succeed");
+    let mut rng = OsRng;
+    let half_n = &params.cpar.n >> 1u32;
+
+    // 名单规模取 n+1 = 8 = 2^3，满足 PoKP 对 2 的幂的要求。
+    let x: Vec<BigUint> = (0..7).map(|_| rng.gen_biguint_below(&half_n)).collect();
+    let fk = HecFunctionKey { n: x.len(), k: 1 };
+    let r_x = rng.gen_biguint_below(&params.cpar.n);
+    let s = rng.gen_biguint_below(&params.cpar.n) + BigUint::from(1u32);
+    let (pk_a, sk_a) = keygen_ppb(&params, &fk, &x, &r_x, &s).expect("keygen should succeed");
+
+    // 命中名单内成员，走完整最长路径（Dec 必须解出具体身份）。
+    let y = HecEvalInput {
+        y_id: x[3].clone(),
+        y_at: rng.gen_biguint_below(&half_n),
+    };
+    let r_y = rng.gen_biguint_below(&params.cpar.n);
+
+    let escrow_out = escrow_ppb(&params, &pk_a, &y, &r_y)
+        .expect("escrow should run")
+        .expect("escrow should pass verification");
+
+    let dec_out = dec_ppb(&params, &sk_a, &escrow_out.c_y, &escrow_out)
+        .expect("dec should run")
+        .expect("dec should return output");
+
+    let z = dec_out.z.clone().expect("watchlisted user must decrypt");
+    assert_eq!(z.y_id, y.y_id % &params.cpar.n);
+    assert_eq!(z.y_at, y.y_at % &params.cpar.n);
+
     let judge_ok = judge_ppb(
         &params,
         &pk_a,

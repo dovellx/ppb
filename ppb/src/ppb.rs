@@ -1685,7 +1685,8 @@ fn build_poks2_proof(
     //
     // 这里的 `c_id` 会作为 `pokp` 输入中的 Cy（即对 y_id 的 DF 承诺），
     // 与你给出的调用模板保持一致。
-    let e_poly = pk_a.x_public.polynomial.evaluate(&y_id);
+    // 必须与 PoKP 递归用的是同一套折叠求值（见 CiphertextPolynomial::evaluate_with_powers）。
+    let e_poly = pk_a.x_public.polynomial.evaluate_mod_n(&y_id, n)?;
     let e_poly_wrapped = com_ah_with_zero_randomness(&params_ah, &e_poly)?;
     let pi_poly = pokp(
         &params_ah,
@@ -1940,25 +1941,6 @@ fn build_enc_statement_commitment(
         c3: &ct.c1 % &params_ah.n2,
         c4: BigUint::one(),
     }
-}
-
-/// 计算 `base^exp`（整数域，无模约简）。
-///
-/// 这里与 `pok.rs` 中递归构造保持同一语义，
-/// 供 PoKP 递归验证阶段重建 `y^(n/2)` 使用。
-fn pow_scalar_usize_for_verify(base: &BigUint, mut exp: usize) -> BigUint {
-    let mut result = BigUint::one();
-    let mut cur = base.clone();
-    while exp > 0 {
-        if (exp & 1) == 1 {
-            result *= &cur;
-        }
-        exp >>= 1;
-        if exp > 0 {
-            cur = &cur * &cur;
-        }
-    }
-    result
 }
 
 /// 查询 `Cy_{2^i}` 的公共承诺值。
@@ -2269,20 +2251,39 @@ fn verify_pokp_public_components(
         return Ok(None);
     }
 
+    // aux 链只需覆盖到 round = rounds-1：最高层的 half = len/2 = 2^{rounds-1}。
     let rounds = c_values.len().ilog2() as usize;
-    if proof.aux.len() != rounds {
+    let aux_rounds = rounds.saturating_sub(1);
+    if proof.aux.len() != aux_rounds {
         return Ok(None);
     }
 
     let mut prev_cy = cy.clone();
-    for i in 1..=rounds {
+    for i in 1..=aux_rounds {
         let entry = &proof.aux[i - 1];
         if entry.round != i {
             return Ok(None);
         }
-        if !verify_df_square_mult(params_df, &prev_cy, &entry.cy_2i, &entry.pi_y2i)? {
+        if &entry.cy_2i >= &params_df.n2 || &entry.c_w >= &params_df.n2 || &entry.c_k >= &params_df.n2
+        {
             return Ok(None);
         }
+
+        // (1) C_w 承诺的是上一轮标量的**整数**平方。
+        if !verify_df_square_mult(params_df, &prev_cy, &entry.c_w, &entry.pi_y2i)? {
+            return Ok(None);
+        }
+
+        // (2) 论文 Remark 1 的模 n 归约检查：C_w == C_{ŝ_i} · C_k^n (mod n²)。
+        // 它把 `ŝ_{i-1}^2 = ŝ_i + k·n` 钉死，从而保证进入下一轮（以及被
+        // verify_cs_mult 消费）的标量始终是 Z_n 中的约简值，
+        // 承诺见证不会随轮次按 2^i 膨胀。
+        let reduced_rhs =
+            (&entry.cy_2i * entry.c_k.modpow(&params_df.n, &params_df.n2)) % &params_df.n2;
+        if reduced_rhs != entry.c_w {
+            return Ok(None);
+        }
+
         prev_cy = entry.cy_2i.clone();
     }
 
@@ -2309,243 +2310,6 @@ fn verify_pokp_public_components(
     Ok(Some(e_poly))
 }
 
-/// 递归验证 `PoK*_P` 证明树。
-///
-/// 核心策略：
-/// 1. 验证每一层中所有 `CS-com / CS-add / CS-mult` 子证明；
-/// 2. 验证 `Cy_alpha` 对公开 `alpha` 的 DF 开口证明；
-/// 3. 按 `tau'=(pi,tau)` 复算每层 `alpha` 挑战；
-/// 4. 用公开 `y` 和公开系数密文重建“下一层语句”，递归向下验证。
-fn verify_pok_star_recursive(
-    params_ah: &CsCommitParams,
-    params_df_for_alpha: &DfParams,
-    y: &BigUint,
-    root_cy: &BigUint,
-    current_c_values: &[crate::cs::CsCiphertext],
-    current_c_p: &crate::cs::CsCiphertext,
-    current_c_p_commitment: &CsCommitment,
-    aux: &[PoKAuxEntry],
-    proof: &PoKStarProof,
-    tau: &PoKTranscript,
-) -> CryptoResult<bool> {
-    if current_c_values.is_empty() || !current_c_values.len().is_power_of_two() {
-        return Ok(false);
-    }
-
-    match proof {
-        PoKStarProof::Base { pi_open_cp } => {
-            if current_c_values.len() != 1 {
-                return Ok(false);
-            }
-            // 与 verify_pok_star_public_shell 保持一致：基例锚定到公开折叠值。
-            // （注意：本 `_recursive` 变体需要明文 y，仅为兼容保留，未接入真实
-            // 验证路径；真实路径是上面的 public_shell 版本。）
-            verify_cs_com_ciphertext(
-                params_ah,
-                current_c_p_commitment,
-                &current_c_values[0],
-                pi_open_cp,
-            )
-        }
-        PoKStarProof::Recursive { round, next } => {
-            if current_c_values.len() < 2 || (current_c_values.len() % 2 != 0) {
-                return Ok(false);
-            }
-
-            if !verify_cs_com(params_ah, &round.c1, &round.pi_c1)? {
-                return Ok(false);
-            }
-            if !verify_cs_com(params_ah, &round.c2, &round.pi_c2)? {
-                return Ok(false);
-            }
-            if !verify_cs_com(params_ah, &round.c3, &round.pi_c3)? {
-                return Ok(false);
-            }
-            if !verify_cs_com(params_ah, &round.c_alpha_e3, &round.pi_c_alpha_e3)? {
-                return Ok(false);
-            }
-            if !verify_cs_com(params_ah, &round.c_p_prime, &round.pi_c_p_prime)? {
-                return Ok(false);
-            }
-
-            if !verify_cs_add(
-                params_ah,
-                &round.c1,
-                &round.c2,
-                current_c_p_commitment,
-                &round.pi_e_eq_e1_plus_e2,
-            )? {
-                return Ok(false);
-            }
-
-            let half = current_c_values.len() / 2;
-            let expected_cy_half = lookup_cy_for_power_from_aux(half, root_cy, aux)?;
-            if expected_cy_half != round.cy_half {
-                return Ok(false);
-            }
-
-            if !verify_cs_mult(
-                params_ah,
-                &round.c2,
-                &round.c3,
-                &round.cy_half,
-                &round.pi_e2_eq_y_half_mul_e3,
-            )? {
-                return Ok(false);
-            }
-
-            if !verify_cs_mult(
-                params_ah,
-                &round.c_alpha_e3,
-                &round.c3,
-                &round.cy_alpha,
-                &round.pi_alpha_mul_e3,
-            )? {
-                return Ok(false);
-            }
-
-            if !verify_df_open_public_scalar(
-                params_df_for_alpha,
-                &round.cy_alpha,
-                &round.alpha,
-                &round.pi_cy_alpha,
-            )? {
-                return Ok(false);
-            }
-
-            if !verify_cs_add(
-                params_ah,
-                &round.c1,
-                &round.c_alpha_e3,
-                &round.c_p_prime,
-                &round.pi_eprime_eq_e1_plus_alphae3,
-            )? {
-                return Ok(false);
-            }
-
-            let expected_alpha = fs_alpha_for_pok_star_verify(&round.c1, &round.c2, &round.c3, tau);
-            if expected_alpha != round.alpha {
-                return Ok(false);
-            }
-            let tau_next = append_round_to_tau_for_pok_star(tau, round);
-
-            let poly = CiphertextPolynomial::new(current_c_values.to_vec(), &params_ah.n2)?;
-            let (lower_poly, upper_poly) = poly.split_in_half();
-            let e1 = lower_poly.evaluate(y);
-            let e3 = upper_poly.evaluate(y);
-            let y_half = pow_scalar_usize_for_verify(y, half);
-            let e2 = cs_homomorphic_scalar_mul(&e3, &y_half, &params_ah.n2);
-            let e_current_expected = cs_homomorphic_add(&e1, &e2, &params_ah.n2);
-            if !ciphertext_eq_mod_n2(&e_current_expected, current_c_p, &params_ah.n2) {
-                return Ok(false);
-            }
-
-            let folded_poly = lower_poly.fold(&upper_poly, &round.alpha);
-            let e_prime = folded_poly.evaluate(y);
-            let next_values = folded_poly.coeffs().to_vec();
-
-            verify_pok_star_recursive(
-                params_ah,
-                params_df_for_alpha,
-                y,
-                root_cy,
-                &next_values,
-                &e_prime,
-                &round.c_p_prime,
-                aux,
-                next,
-                &tau_next,
-            )
-        }
-    }
-}
-
-/// 验证 `pi_poly`（PoKP）证明对象。
-///
-/// 注意：
-/// 1. 该函数会同时验证 `aux` 的平方链证明与 `PoK*` 递归证明树；
-/// 2. 并严格检查 transcript 绑定：`tau=(Cy,c_values,cP)` 必须与外部语句一致。
-fn verify_pokp_proof(
-    params_ah: &CsCommitParams,
-    params_df: &DfParams,
-    y: &BigUint,
-    cy: &BigUint,
-    c_values: &[crate::cs::CsCiphertext],
-    c_p: &crate::cs::CsCiphertext,
-    proof: &PoKPProof,
-) -> CryptoResult<bool> {
-    if c_values.is_empty() || !c_values.len().is_power_of_two() {
-        return Ok(false);
-    }
-
-    if proof.tau.cy != *cy {
-        return Ok(false);
-    }
-
-    if !proof.tau.history.is_empty() {
-        return Ok(false);
-    }
-
-    if proof.tau.c_values.len() != c_values.len() {
-        return Ok(false);
-    }
-    for (lhs, rhs) in proof.tau.c_values.iter().zip(c_values.iter()) {
-        if !ciphertext_eq_mod_n2(lhs, rhs, &params_ah.n2) {
-            return Ok(false);
-        }
-    }
-
-    if !ciphertext_eq_mod_n2(&proof.tau.c_p, c_p, &params_ah.n2) {
-        return Ok(false);
-    }
-
-    let c_p_wrapped = com_ah_with_zero_randomness(params_ah, c_p)?;
-    if proof.c_p_commitment.c1 != c_p_wrapped.commitment.c1
-        || proof.c_p_commitment.c2 != c_p_wrapped.commitment.c2
-        || proof.c_p_commitment.c3 != c_p_wrapped.commitment.c3
-        || proof.c_p_commitment.c4 != c_p_wrapped.commitment.c4
-    {
-        return Ok(false);
-    }
-
-    let rounds = c_values.len().ilog2() as usize;
-    if proof.aux.len() != rounds {
-        return Ok(false);
-    }
-
-    let mut prev_cy = cy.clone();
-    for i in 1..=rounds {
-        let entry = &proof.aux[i - 1];
-        if entry.round != i {
-            return Ok(false);
-        }
-
-        if !verify_df_square_mult(params_df, &prev_cy, &entry.cy_2i, &entry.pi_y2i)? {
-            return Ok(false);
-        }
-        prev_cy = entry.cy_2i.clone();
-    }
-
-    let params_df_for_alpha = DfParams {
-        n: params_ah.n.clone(),
-        n2: params_ah.n2.clone(),
-        g: params_ah.g_prime.clone(),
-        h: params_ah.h_prime.clone(),
-    };
-
-    verify_pok_star_recursive(
-        params_ah,
-        &params_df_for_alpha,
-        y,
-        cy,
-        c_values,
-        c_p,
-        &proof.c_p_commitment,
-        &proof.aux,
-        &proof.recursive_proof,
-        &proof.tau,
-    )
-}
 
 fn verify_enc_mul_add_component(
     params_ah: &CsCommitParams,

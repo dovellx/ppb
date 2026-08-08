@@ -335,7 +335,9 @@ pub fn hec_eval(
     // Step 3: E <- Enc(P(y_id))。
     // 注意这里按算法语义从 X=(A1..A_{n+1}) 解析构建多项式再 evaluate。
     let poly_from_x = CiphertextPolynomial::new(x_public.encrypted_coeffs.clone(), n2)?;
-    let e = poly_from_x.evaluate(&y_id);
+    // 用 Algorithm 2 的折叠结构求值，保证 HECeval 的输出与 PoKS2 的证明链一致。
+    // 与 Horner 求值解密到同一明文，只是密文代表元不同。
+    let e = poly_from_x.evaluate_mod_n(&y_id, n)?;
 
     // Step 4 & 5: 独立加密 y_id / y_at（使用外部给定随机数）。
     let y_id_enc = enc_cs_with_randomness(&hecpar.cs_params, &x_public.pk_ah, &y_id, &rid)?;
